@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import Papa from "papaparse";
@@ -35,7 +35,7 @@ import {
   resizedRect,
   screenPointToCanvasPoint,
 } from "./utils/coordinates";
-import { clearProject, loadProject, saveProject } from "./utils/storage";
+import { clearProject, loadCsvSession, loadProject, saveCsvSession, saveProject } from "./utils/storage";
 import uiText from "./i18n/ui-text.json";
 import "./styles.css";
 
@@ -115,7 +115,8 @@ const FUNCTION_FIELD_NAMES = {
 };
 const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/svg+xml", "image/webp"]);
 const IMAGE_FILE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "svg", "webp"]);
-const APP_VERSION = "v1.5";
+const MAX_UPLOAD_BYTES = 3 * 1024 * 1024;
+const APP_VERSION = "v1.5002";
 const RESIZE_HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const SNAP_GRID_SIZE = 8;
 const SNAP_THRESHOLD = 6;
@@ -260,6 +261,7 @@ function App() {
   const [setupSourceKind, setSetupSourceKind] = useState("pdf");
   const [designerMode, setDesignerMode] = useState("crop");
   const [language, setLanguage] = useState(() => localStorage.getItem("template-print-language") || "en");
+  const [csvUploadEncoding, setCsvUploadEncoding] = useState("auto");
   const [templates, setTemplates] = useState([]);
   const [activeTemplateId, setActiveTemplateId] = useState("");
   const [csvDatasets, setCsvDatasets] = useState([]);
@@ -353,29 +355,45 @@ function App() {
     const migratedTemplates = migrateTemplatesWithLegacyMappings(saved.templates ?? [], saved.mappings ?? {}, saved.activeCsvId ?? "");
     setTemplates(migratedTemplates.map(({ savedPreviewImageUrl, ...template }) => template));
     setActiveTemplateId(saved.activeTemplateId ?? saved.templates?.[0]?.templateId ?? "");
-    setCsvDatasets(saved.csvDatasets ?? []);
-    setActiveCsvId(saved.activeCsvId ?? saved.csvDatasets?.[0]?.id ?? "");
-    setSelectedRowIds(saved.selectedRowIds ?? []);
-    setRowCopies(saved.rowCopies ?? {});
     setMappings(saved.mappings ?? {});
     setLayout(normalizeLayout(saved.printLayout ?? saved.layout ?? {}));
     setDesignLayout(normalizeLayout(saved.designLayout ?? saved.layout ?? {}));
+
+    const csvSession = loadCsvSession();
+    const sessionCsvDatasets = csvSession?.csvDatasets ?? [];
+    const sessionActiveCsvId = csvSession?.activeCsvId ?? sessionCsvDatasets[0]?.id ?? "";
+    setCsvDatasets(sessionCsvDatasets);
+    setActiveCsvId(sessionActiveCsvId);
+    setSelectedRowIds(csvSession?.selectedRowIds ?? []);
+    setRowCopies(csvSession?.rowCopies ?? {});
   }, []);
 
   useEffect(() => {
-    saveProject({
+    const ok = saveProject({
       templates,
       activeTemplateId,
-      csvDatasets,
-      activeCsvId,
-      selectedRowIds,
-      rowCopies,
       mappings,
       layout,
       printLayout: layout,
       designLayout,
     });
-  }, [templates, activeTemplateId, csvDatasets, activeCsvId, selectedRowIds, rowCopies, mappings, layout, designLayout]);
+    if (!ok) {
+      setStatus(t("status.storageQuotaExceeded"));
+    }
+  }, [templates, activeTemplateId, mappings, layout, designLayout, t]);
+
+  useEffect(() => {
+    const csvSession = {
+      csvDatasets,
+      activeCsvId,
+      selectedRowIds,
+      rowCopies,
+    };
+    const ok = saveCsvSession(csvSession);
+    if (!ok) {
+      setStatus(t("status.storageQuotaExceeded"));
+    }
+  }, [csvDatasets, activeCsvId, selectedRowIds, rowCopies, t]);
 
   useEffect(() => {
     localStorage.setItem("template-print-language", language);
@@ -730,9 +748,108 @@ function App() {
     pdfZoom,
   ]);
 
+  const drawCropPreview = useCallback(async () => {
+    if (!activeTemplate?.cropArea || !activeTemplate?.sourcePdf?.dataBase64) {
+      setCropPreviewImageUrl("");
+      setCropPreviewDisplaySize(null);
+      return;
+    }
+    try {
+      const sourceType = activeTemplate.sourcePdf.sourceType ?? "pdf";
+      let baseViewport = null;
+      let renderToCanvas = null;
+      if (sourceType === "pdf") {
+        if (!pdfDoc) {
+          setCropPreviewImageUrl("");
+          setCropPreviewDisplaySize(null);
+          return;
+        }
+        const previewPageNumber = activeTemplate.sourcePdf?.pageNumber ?? pageNumber;
+        const page = await pdfDoc.getPage(previewPageNumber);
+        baseViewport = page.getViewport({ scale: 1 });
+        renderToCanvas = async (targetCanvas, scale) => {
+          const viewport = page.getViewport({ scale });
+          targetCanvas.width = viewport.width;
+          targetCanvas.height = viewport.height;
+          await page.render({
+            canvasContext: targetCanvas.getContext("2d"),
+            viewport,
+            annotationMode: pdfjsLib.AnnotationMode?.ENABLE_FORMS,
+          }).promise;
+        };
+      } else {
+        const image = await loadImageElement(sourceDataUrl(activeTemplate.sourcePdf));
+        baseViewport = { width: image.naturalWidth, height: image.naturalHeight };
+        renderToCanvas = async (targetCanvas, scale) => {
+          targetCanvas.width = Math.round(baseViewport.width * scale);
+          targetCanvas.height = Math.round(baseViewport.height * scale);
+          const targetContext = targetCanvas.getContext("2d");
+          targetContext.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+          targetContext.drawImage(image, 0, 0, targetCanvas.width, targetCanvas.height);
+        };
+      }
+      const cropPixels = ratioRectToPixels(activeTemplate.cropArea, baseViewport.width, baseViewport.height);
+      const previewZoom = designerMode === "fields" ? fieldZoom : 1;
+      const minPreviewWidth = window.innerWidth < 720 ? Math.max(220, window.innerWidth - 44) : 520;
+      const baseWidth = cropPixels.width * Math.max(renderBox.scale, 1) * previewZoom;
+      const displayWidth = Math.min(1100, Math.max(minPreviewWidth, baseWidth));
+      const displayScale = displayWidth / cropPixels.width;
+      const qualityScale = Math.max(1.5, Math.min(2.25, window.devicePixelRatio || 1.5));
+      const scale = displayScale * qualityScale;
+      const offscreen = document.createElement("canvas");
+      await renderToCanvas(offscreen, scale);
+      const targetWidth = Math.round(cropPixels.width * scale);
+      const targetHeight = Math.round(cropPixels.height * scale);
+      const displayHeight = Math.round(cropPixels.height * displayScale);
+      const cropCanvas = document.createElement("canvas");
+      cropCanvas.width = targetWidth;
+      cropCanvas.height = targetHeight;
+      const cropContext = cropCanvas.getContext("2d");
+      cropContext.drawImage(
+        offscreen,
+        cropPixels.x * scale,
+        cropPixels.y * scale,
+        cropPixels.width * scale,
+        cropPixels.height * scale,
+        0,
+        0,
+        targetWidth,
+        targetHeight,
+      );
+      const nextSize = { width: Math.round(displayWidth), height: displayHeight };
+      setCropPreviewDisplaySize((current) => {
+        if (current && current.width === nextSize.width && current.height === nextSize.height) return current;
+        return nextSize;
+      });
+      setCropPreviewImageUrl(cropCanvas.toDataURL("image/png"));
+      const canvas = cropPreviewRef.current?.querySelector(".crop-preview-canvas");
+      if (!canvas) return;
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      canvas.style.width = `${Math.round(displayWidth)}px`;
+      canvas.style.height = `${displayHeight}px`;
+      const context = canvas.getContext("2d");
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(cropCanvas, 0, 0);
+    } catch (error) {
+      setCropPreviewImageUrl("");
+      setCropPreviewDisplaySize(null);
+      setStatus(t("status.cropPreviewFailed", { message: error.message }));
+    }
+  }, [activeTemplate, designerMode, fieldZoom, pageNumber, pdfDoc, renderBox, t]);
+
+  const setCropPreviewNode = useCallback((node) => {
+    cropPreviewRef.current = node;
+    if (node) {
+      window.requestAnimationFrame(() => {
+        drawCropPreview();
+      });
+    }
+  }, [drawCropPreview]);
+
   useEffect(() => {
     requestAnimationFrame(() => drawCropPreview());
-  }, [view, designerMode, fieldZoom, activeTemplate?.cropArea, activeTemplate?.variables, renderBox, pdfDoc, pageNumber]);
+  }, [view, designerMode, fieldZoom, activeTemplate?.cropArea, activeTemplate?.variables, renderBox, pdfDoc, pageNumber, drawCropPreview]);
 
   useEffect(() => {
     const canPasteSource = (view === "setup" && setupSourceKind === "image") || (view === "designer" && designerMode === "crop");
@@ -785,13 +902,12 @@ function App() {
     };
   }, [view, designerMode, setupSourceKind, t]);
 
-  function setCropPreviewNode(node) {
-    cropPreviewRef.current = node;
-    if (node) requestAnimationFrame(() => drawCropPreview());
-  }
-
   async function ingestTemplateSourceFile(file) {
     if (!file) return;
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setStatus(t("status.fileTooLarge"));
+      return;
+    }
     const extension = String(file.name || "").toLowerCase().split(".").pop() || "";
     const isPdf = file.type === "application/pdf" || extension === "pdf";
     const isImage = IMAGE_MIME_TYPES.has(file.type) || IMAGE_FILE_EXTENSIONS.has(extension);
@@ -1120,92 +1236,6 @@ function App() {
     window.removeEventListener("pointerup", endPointerDrag);
   }
 
-  async function drawCropPreview() {
-    if (!activeTemplate?.cropArea || !activeTemplate?.sourcePdf?.dataBase64) {
-      setCropPreviewImageUrl("");
-      setCropPreviewDisplaySize(null);
-      return;
-    }
-    try {
-      const sourceType = activeTemplate.sourcePdf.sourceType ?? "pdf";
-      let baseViewport = null;
-      let renderToCanvas = null;
-      if (sourceType === "pdf") {
-        if (!pdfDoc) {
-          setCropPreviewImageUrl("");
-          setCropPreviewDisplaySize(null);
-          return;
-        }
-        const previewPageNumber = activeTemplate.sourcePdf?.pageNumber ?? pageNumber;
-        const page = await pdfDoc.getPage(previewPageNumber);
-        baseViewport = page.getViewport({ scale: 1 });
-        renderToCanvas = async (targetCanvas, scale) => {
-          const viewport = page.getViewport({ scale });
-          targetCanvas.width = viewport.width;
-          targetCanvas.height = viewport.height;
-          await page.render({
-            canvasContext: targetCanvas.getContext("2d"),
-            viewport,
-            annotationMode: pdfjsLib.AnnotationMode?.ENABLE_FORMS,
-          }).promise;
-        };
-      } else {
-        const image = await loadImageElement(sourceDataUrl(activeTemplate.sourcePdf));
-        baseViewport = { width: image.naturalWidth, height: image.naturalHeight };
-        renderToCanvas = async (targetCanvas, scale) => {
-          targetCanvas.width = Math.round(baseViewport.width * scale);
-          targetCanvas.height = Math.round(baseViewport.height * scale);
-          const targetContext = targetCanvas.getContext("2d");
-          targetContext.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
-          targetContext.drawImage(image, 0, 0, targetCanvas.width, targetCanvas.height);
-        };
-      }
-      const cropPixels = ratioRectToPixels(activeTemplate.cropArea, baseViewport.width, baseViewport.height);
-      const previewZoom = designerMode === "fields" ? fieldZoom : 1;
-      const minPreviewWidth = window.innerWidth < 720 ? Math.max(220, window.innerWidth - 44) : 520;
-      const baseWidth = cropPixels.width * Math.max(renderBox.scale, 1) * previewZoom;
-      const displayWidth = Math.min(1100, Math.max(minPreviewWidth, baseWidth));
-      const displayScale = displayWidth / cropPixels.width;
-      const qualityScale = Math.max(1.5, Math.min(2.25, window.devicePixelRatio || 1.5));
-      const scale = displayScale * qualityScale;
-      const offscreen = document.createElement("canvas");
-      await renderToCanvas(offscreen, scale);
-      const targetWidth = Math.round(cropPixels.width * scale);
-      const targetHeight = Math.round(cropPixels.height * scale);
-      const displayHeight = Math.round(cropPixels.height * displayScale);
-      const cropCanvas = document.createElement("canvas");
-      cropCanvas.width = targetWidth;
-      cropCanvas.height = targetHeight;
-      const cropContext = cropCanvas.getContext("2d");
-      cropContext.drawImage(
-        offscreen,
-        cropPixels.x * scale,
-        cropPixels.y * scale,
-        cropPixels.width * scale,
-        cropPixels.height * scale,
-        0,
-        0,
-        targetWidth,
-        targetHeight,
-      );
-      setCropPreviewDisplaySize({ width: Math.round(displayWidth), height: displayHeight });
-      setCropPreviewImageUrl(cropCanvas.toDataURL("image/png"));
-      const canvas = cropPreviewRef.current?.querySelector(".crop-preview-canvas");
-      if (!canvas) return;
-      canvas.width = targetWidth;
-      canvas.height = targetHeight;
-      canvas.style.width = `${Math.round(displayWidth)}px`;
-      canvas.style.height = `${displayHeight}px`;
-      const context = canvas.getContext("2d");
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      context.drawImage(cropCanvas, 0, 0);
-    } catch (error) {
-      setCropPreviewImageUrl("");
-      setCropPreviewDisplaySize(null);
-      setStatus(t("status.cropPreviewFailed", { message: error.message }));
-    }
-  }
-
   function addVariable() {
     if (!activeTemplate?.cropArea) {
       setStatus(t("status.saveCropBeforeVariables"));
@@ -1524,8 +1554,12 @@ function App() {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
+    if (file.size > MAX_UPLOAD_BYTES) {
+      setStatus(t("status.fileTooLarge"));
+      return;
+    }
     try {
-      const decoded = await decodeCsvFile(file, "auto");
+      const decoded = await decodeCsvFile(file, csvUploadEncoding);
       const result = Papa.parse(decoded.text, { header: true, skipEmptyLines: true });
       if (result.errors?.length) throw new Error(result.errors[0].message);
       const id = crypto.randomUUID();
@@ -2120,6 +2154,8 @@ function App() {
             setPreviewCsvId={setPreviewCsvId}
             onCsvUpload={handleCsvUpload}
             deleteCsvDataset={deleteCsvDataset}
+            csvUploadEncoding={csvUploadEncoding}
+            setCsvUploadEncoding={setCsvUploadEncoding}
             t={t}
           />
         )}
@@ -3320,6 +3356,8 @@ function CsvPage({
   setPreviewCsvId,
   onCsvUpload,
   deleteCsvDataset,
+  csvUploadEncoding,
+  setCsvUploadEncoding,
   t,
 }) {
   const active = datasets.find((dataset) => dataset.id === activeCsvId);
@@ -3333,6 +3371,14 @@ function CsvPage({
             <p className="muted">{t("csv.savedDatasetsText")}</p>
           </div>
           <div className="csv-upload-tools">
+            <label className="inline-control">
+              <span>{t("csv.encoding")}</span>
+              <select value={csvUploadEncoding} onChange={(event) => setCsvUploadEncoding(event.target.value)}>
+                {CSV_ENCODINGS.map((encoding) => (
+                  <option key={encoding.value} value={encoding.value}>{t(encoding.labelKey)}</option>
+                ))}
+              </select>
+            </label>
             <label className="button primary ui-button">
               <Upload size={16} /> {t("button.uploadCsv")}
               <input type="file" accept=".csv,text/csv" onChange={onCsvUpload} />
@@ -5374,8 +5420,8 @@ async function loadPdfFonts(outputDoc) {
     fetch(PDF_FONTS.regular).then(assertFontResponse).then((response) => response.arrayBuffer()),
     fetch(PDF_FONTS.bold).then(assertFontResponse).then((response) => response.arrayBuffer()),
   ]);
-  const regularFont = await outputDoc.embedFont(regularBytes, { subset: false });
-  const boldFont = await outputDoc.embedFont(boldBytes, { subset: false });
+  const regularFont = await outputDoc.embedFont(regularBytes, { subset: true });
+  const boldFont = await outputDoc.embedFont(boldBytes, { subset: true });
   return { regularFont, boldFont };
 }
 
@@ -5395,7 +5441,8 @@ function loadPdfJsDocumentTask(data) {
   return pdfjsLib.getDocument({
     data,
     disableWorker: true,
-    enableXfa: true,
+    enableXfa: false,
+    isEvalSupported: false,
     useSystemFonts: true,
     wasmUrl: PDFJS_WASM_URL,
   });
