@@ -3,5 +3,9 @@ dist/
 .env
 .DS_Store
 npm-debug.log*
-FEATURE_STATUS.md
-AUDIT-for-copilot.md
+
+# Ignore generated / local project data
+*.csv
+*.pdf
+*.txt
+*.md
