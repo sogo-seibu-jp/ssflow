@@ -2972,6 +2972,7 @@ function DesignerPage(props) {
             </div>
             <button className="icon-button" title={t("designer.closeFieldsPanel")} onClick={() => setInspectorOpen(false)}><X size={16} /></button>
           </div>
+          <div className="inspector-body">
           <div className="inspector-tools">
             <div className="inspector-controls-card">
               <label className="snap-toggle">
@@ -2990,7 +2991,8 @@ function DesignerPage(props) {
               </div>
             </div>
           </div>
-          <div className="variable-list">
+          <div className="inspector-card">
+            <div className="variable-list">
             {template.variables.length === 0 && <p className="muted">{t("designer.noFields")}</p>}
             {template.variables.map((variable) => {
               const isSelected = selectedVariableIds.includes(variable.id);
@@ -3049,6 +3051,7 @@ function DesignerPage(props) {
                 />
                 <button
                   className="variable-list-label"
+                  title={variable.displayName || variable.key}
                   onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
@@ -3081,6 +3084,7 @@ function DesignerPage(props) {
               </div>
               );
             })}
+            </div>
           </div>
           <VariableEditor
             variable={selectedVariable}
@@ -3093,6 +3097,7 @@ function DesignerPage(props) {
             rules={template?.rules ?? []}
             t={t}
           />
+          </div>
         </aside>
       )}
     </section>

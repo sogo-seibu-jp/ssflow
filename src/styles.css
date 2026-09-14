@@ -751,13 +751,17 @@ button:not(.primary) .spinner {
 }
 
 @media (min-width: 1081px) {
+  .editor-layout {
+    min-height: 560px;
+  }
+
   .editor-layout > .inspector {
     bottom: 12px;
     box-shadow: 0 20px 38px rgba(20, 40, 74, 0.16);
     position: absolute;
     right: 12px;
     top: 12px;
-    width: clamp(240px, 18vw, 300px);
+    width: clamp(324px, 26vw, 420px);
     z-index: 8;
   }
 }
@@ -778,6 +782,9 @@ button:not(.primary) .spinner {
   background: #ffffff;
   border: 1px solid #dbe3ec;
   border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .section-card {
@@ -877,6 +884,7 @@ button:not(.primary) .spinner {
 
 .inspector-tools {
   display: flex;
+  flex: 0 0 auto;
   margin-bottom: 8px;
 }
 
@@ -900,10 +908,9 @@ button:not(.primary) .spinner {
 
 .align-panel {
   align-items: center;
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
   gap: 4px;
-  justify-content: flex-start;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .align-action {
@@ -917,7 +924,7 @@ button:not(.primary) .spinner {
   justify-content: center;
   line-height: 1;
   min-height: 26px;
-  min-width: 54px;
+  min-width: 0;
   padding: 3px 7px;
   transition: all 0.16s ease;
   white-space: nowrap;
@@ -1510,13 +1517,10 @@ button:not(.primary) .spinner {
 }
 
 .inspector {
-  align-self: start;
-  display: grid;
-  gap: 12px;
-  grid-template-rows: auto auto minmax(0, 156px) minmax(220px, 1.1fr);
-  max-height: calc(100dvh - var(--top-chrome-offset) - 54px);
+  display: flex;
+  flex-direction: column;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   padding: 12px;
 }
 
@@ -1651,13 +1655,51 @@ button:not(.primary) .spinner {
   right: 0;
 }
 
-.variable-list {
-  display: grid;
-  gap: 4px;
-  align-content: start;
-  max-height: 156px;
+/* Panel head is fixed; everything below scrolls as ONE region. Nested scroll
+   areas competing for height is what made this panel unusable. */
+.inspector > .panel-head {
+  flex: 0 0 auto;
+  margin-bottom: 8px;
+}
+
+.inspector-card {
+  background: #ffffff;
+  border: 1px solid #dbe3ec;
+  border-radius: 8px;
+  display: flex;
+  flex: 1 1 34%;
+  flex-direction: column;
+  min-height: 110px;
+  padding: 8px;
+}
+
+.inspector-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 10px;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
+}
+
+.inspector-body > .muted {
+  background: #f7faff;
+  flex: 0 0 auto;
+  border: 1px dashed #cdd9e8;
+  border-radius: 8px;
+  margin: 0;
+  padding: 12px 10px;
+  text-align: center;
+}
+
+.variable-list {
+  align-content: start;
+  display: grid;
+  flex: 1 1 auto;
+  gap: 4px;
+  max-height: none;
+  min-height: 0;
+  overflow-y: auto;
   padding-right: 4px;
   scrollbar-width: thin;
 }
@@ -1678,6 +1720,25 @@ button:not(.primary) .spinner {
   min-height: 14px;
   min-width: 14px;
   width: 14px;
+}
+
+.variable-list-label {
+  background: none;
+  border: 0;
+  cursor: pointer;
+  min-width: 0;
+  overflow: hidden;
+  padding: 2px 2px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.variable-list-label strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .variable-list-actions {
@@ -1737,17 +1798,21 @@ button:not(.primary) .spinner {
 }
 
 .field-editor {
-  border-top: 1px solid #e6ebf1;
+  align-content: start;
+  background: #ffffff;
+  border: 1px solid #dbe3ec;
+  border-radius: 8px;
   display: grid;
+  flex: 1 1 66%;
   gap: 12px;
   min-height: 0;
-  overflow: auto;
-  padding-top: 12px;
+  overflow-y: auto;
+  padding: 10px 8px;
   scrollbar-width: thin;
 }
 
 .compact-form {
-  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
   margin-bottom: 0;
 }
 
@@ -4533,17 +4598,26 @@ th {
   }
 
   .inspector {
-    grid-template-rows: auto auto minmax(0, 148px) auto;
     max-height: none;
     overflow: visible;
     padding: 12px;
   }
 
+  .inspector-body {
+    overflow: visible;
+  }
+
+  .inspector-card {
+    flex: 0 0 auto;
+    min-height: 0;
+  }
+
   .variable-list {
-    max-height: 148px;
+    max-height: 240px;
   }
 
   .field-editor {
+    flex: 0 0 auto;
     max-height: none;
     overflow: visible;
   }
