@@ -342,7 +342,7 @@ h3 {
 .main {
   display: block;
   min-width: 0;
-  padding-top: var(--top-chrome-offset);
+  padding-top: 0;
 }
 
 .mode-home-main {
@@ -417,7 +417,7 @@ h3 {
 
 .top-chrome {
   left: 0;
-  position: fixed;
+  position: sticky;
   right: 0;
   top: 0;
   z-index: 120;
@@ -704,7 +704,7 @@ button:not(.primary) .spinner {
 }
 
 .print-layout-single .print-preview-full {
-  min-height: calc(100vh - 130px);
+  min-height: calc(100dvh - var(--top-chrome-offset) + 26px);
 }
 
 .print-layout-actions {
@@ -1173,7 +1173,7 @@ button:not(.primary) .spinner {
 }
 
 .canvas-card {
-  max-height: calc(100vh - 184px);
+  max-height: calc(100dvh - var(--top-chrome-offset) - 36px);
   min-width: 0;
   overflow: auto;
   overscroll-behavior: contain;
@@ -1186,7 +1186,7 @@ button:not(.primary) .spinner {
 
 .editor-layout .canvas-card {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   overflow: hidden;
 }
 
@@ -1514,7 +1514,7 @@ button:not(.primary) .spinner {
   display: grid;
   gap: 12px;
   grid-template-rows: auto auto minmax(0, 156px) minmax(220px, 1.1fr);
-  max-height: calc(100vh - 210px);
+  max-height: calc(100dvh - var(--top-chrome-offset) - 54px);
   min-height: 0;
   overflow: auto;
   padding: 12px;
@@ -1544,8 +1544,8 @@ button:not(.primary) .spinner {
   display: inline-block;
   line-height: 0;
   margin: 10px;
-  min-height: 180px;
-  min-width: 320px;
+  min-height: 0;
+  min-width: 0;
   padding: 18px;
   position: relative;
   max-width: none;
@@ -1557,6 +1557,7 @@ button:not(.primary) .spinner {
   border: 1px solid #c8d4e2;
   border-radius: 6px;
   box-shadow: 0 16px 34px rgba(20, 40, 74, 0.14);
+  display: block;
   height: 100%;
   overflow: hidden;
   position: relative;
@@ -1568,16 +1569,18 @@ button:not(.primary) .spinner {
   display: block;
   height: 100%;
   width: 100%;
+  image-rendering: auto;
 }
 
 .crop-preview-canvas {
+  image-rendering: crisp-edges;
   position: relative;
   z-index: 1;
 }
 
 .crop-preview-image {
   inset: 0;
-  object-fit: fill;
+  object-fit: contain;
   position: absolute;
   z-index: 2;
 }
@@ -1596,6 +1599,12 @@ button:not(.primary) .spinner {
 }
 
 .variable-text,
+.field-size-hint {
+  color: #5b7091;
+  font-size: 11px;
+  margin-top: 2px;
+}
+
 .paper-variable-text {
   display: inline-block;
   max-width: 100%;
@@ -2678,7 +2687,7 @@ button:not(.primary) .spinner {
   border-radius: 8px;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  max-height: calc(100vh - 360px);
+  max-height: calc(100dvh - var(--top-chrome-offset) - 204px);
   min-width: 0;
   overflow: hidden;
 }
@@ -4127,7 +4136,7 @@ th {
 }
 
 .empty-state.large {
-  min-height: calc(100vh - 124px);
+  min-height: calc(100dvh - var(--top-chrome-offset) + 32px);
 }
 
 .empty-upload-button {
@@ -4255,10 +4264,6 @@ th {
 }
 
 @media (max-width: 720px) {
-  :root {
-    --top-chrome-offset: 170px;
-  }
-
   .main {
     max-width: 100vw;
     overflow-x: hidden;
@@ -4269,6 +4274,16 @@ th {
   input,
   select {
     min-height: 36px;
+  }
+
+  .top-chrome {
+    position: sticky;
+    top: 0;
+    z-index: 140;
+  }
+
+  .main {
+    padding-top: 0;
   }
 
   .page-header {
@@ -4726,10 +4741,6 @@ th {
 }
 
 @media (max-width: 480px) {
-  :root {
-    --top-chrome-offset: 174px;
-  }
-
   .page-header,
   .flow-bar,
   .page-grid,

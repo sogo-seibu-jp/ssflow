@@ -116,7 +116,7 @@ const FUNCTION_FIELD_NAMES = {
 const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/svg+xml", "image/webp"]);
 const IMAGE_FILE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "svg", "webp"]);
 const MAX_UPLOAD_BYTES = 3 * 1024 * 1024;
-const APP_VERSION = "v1.5005";
+const APP_VERSION = "v1.5006";
 const RESIZE_HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const SNAP_GRID_SIZE = 8;
 const SNAP_THRESHOLD = 6;
@@ -698,7 +698,7 @@ function App() {
       const minCanvasWidth = window.innerWidth < 720 ? Math.max(240, window.innerWidth - 32) : 420;
       const maxWidth = Math.min(1240, Math.max(minCanvasWidth, window.innerWidth - cropWorkspaceReserve));
       const fitScale = Math.max(0.35, Math.min(1.8, maxWidth / resolvedBaseViewport.width));
-      const scale = Math.max(0.35, Math.min(3, fitScale * pdfZoom));
+      const scale = Math.max(0.1, Math.min(8, fitScale * pdfZoom));
       const viewport = sourceType === "pdf"
         ? page.getViewport({ scale })
         : { width: resolvedBaseViewport.width * scale, height: resolvedBaseViewport.height * scale };
@@ -726,7 +726,19 @@ function App() {
       const nextRenderBox = { width: viewport.width, height: viewport.height, scale };
       setPageSize(nextPageSize);
       setRenderBox(nextRenderBox);
-      setCropRect(activeTemplate?.cropArea ? ratioRectToPixels(activeTemplate.cropArea, viewport.width, viewport.height) : null);
+      if (activeTemplate?.cropArea) {
+        const pageRect = ratioRectToPixels(activeTemplate.cropArea, nextPageSize.width, nextPageSize.height);
+        const renderScaleX = viewport.width / nextPageSize.width;
+        const renderScaleY = viewport.height / nextPageSize.height;
+        setCropRect({
+          x: pageRect.x * renderScaleX,
+          y: pageRect.y * renderScaleY,
+          width: pageRect.width * renderScaleX,
+          height: pageRect.height * renderScaleY,
+        });
+      } else {
+        setCropRect(null);
+      }
     }
     renderPage().catch((error) => setStatus(error.message));
     return () => {
@@ -756,81 +768,47 @@ function App() {
     }
     try {
       const sourceType = activeTemplate.sourcePdf.sourceType ?? "pdf";
-      let baseViewport = null;
-      let renderToCanvas = null;
+      let cropResult;
       if (sourceType === "pdf") {
         if (!pdfDoc) {
           setCropPreviewImageUrl("");
           setCropPreviewDisplaySize(null);
           return;
         }
-        const previewPageNumber = activeTemplate.sourcePdf?.pageNumber ?? pageNumber;
-        const page = await pdfDoc.getPage(previewPageNumber);
-        baseViewport = page.getViewport({ scale: 1 });
-        renderToCanvas = async (targetCanvas, scale) => {
-          const viewport = page.getViewport({ scale });
-          targetCanvas.width = viewport.width;
-          targetCanvas.height = viewport.height;
-          await page.render({
-            canvasContext: targetCanvas.getContext("2d"),
-            viewport,
-            annotationMode: pdfjsLib.AnnotationMode?.ENABLE_FORMS,
-          }).promise;
-        };
+        cropResult = await renderPdfCropToPng(pdfDoc, activeTemplate.sourcePdf.pageNumber ?? pageNumber, activeTemplate.cropArea);
       } else {
-        const image = await loadImageElement(sourceDataUrl(activeTemplate.sourcePdf));
-        baseViewport = { width: image.naturalWidth, height: image.naturalHeight };
-        renderToCanvas = async (targetCanvas, scale) => {
-          targetCanvas.width = Math.round(baseViewport.width * scale);
-          targetCanvas.height = Math.round(baseViewport.height * scale);
-          const targetContext = targetCanvas.getContext("2d");
-          targetContext.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
-          targetContext.drawImage(image, 0, 0, targetCanvas.width, targetCanvas.height);
-        };
+        cropResult = await renderImageCropToPng(activeTemplate.sourcePdf, activeTemplate.cropArea);
       }
-      const cropPixels = ratioRectToPixels(activeTemplate.cropArea, baseViewport.width, baseViewport.height);
+
+      const cropPixels = { width: cropResult.width, height: cropResult.height };
       const previewZoom = designerMode === "fields" ? fieldZoom : 1;
       const minPreviewWidth = window.innerWidth < 720 ? Math.max(220, window.innerWidth - 44) : 520;
-      const baseWidth = cropPixels.width * Math.max(renderBox.scale, 1) * previewZoom;
-      const displayWidth = Math.min(1100, Math.max(minPreviewWidth, baseWidth));
-      const displayScale = displayWidth / cropPixels.width;
-      const qualityScale = Math.max(1.5, Math.min(2.25, window.devicePixelRatio || 1.5));
-      const scale = displayScale * qualityScale;
-      const offscreen = document.createElement("canvas");
-      await renderToCanvas(offscreen, scale);
-      const targetWidth = Math.round(cropPixels.width * scale);
-      const targetHeight = Math.round(cropPixels.height * scale);
-      const displayHeight = Math.round(cropPixels.height * displayScale);
-      const cropCanvas = document.createElement("canvas");
-      cropCanvas.width = targetWidth;
-      cropCanvas.height = targetHeight;
-      const cropContext = cropCanvas.getContext("2d");
-      cropContext.drawImage(
-        offscreen,
-        cropPixels.x * scale,
-        cropPixels.y * scale,
-        cropPixels.width * scale,
-        cropPixels.height * scale,
-        0,
-        0,
-        targetWidth,
-        targetHeight,
-      );
+      const naturalWidth = Math.max(cropPixels.width, 1);
+      const naturalHeight = Math.max(cropPixels.height, 1);
+      const baseWidth = Math.min(1100, Math.max(minPreviewWidth, naturalWidth));
+      const displayWidth = Math.max(120, Math.min(4000, baseWidth * previewZoom));
+      const displayScale = displayWidth / naturalWidth;
+      const displayHeight = Math.round(naturalHeight * displayScale);
       const nextSize = { width: Math.round(displayWidth), height: displayHeight };
       setCropPreviewDisplaySize((current) => {
         if (current && current.width === nextSize.width && current.height === nextSize.height) return current;
         return nextSize;
       });
-      setCropPreviewImageUrl(cropCanvas.toDataURL("image/png"));
+      setCropPreviewImageUrl(cropResult.dataUrl);
       const canvas = cropPreviewRef.current?.querySelector(".crop-preview-canvas");
       if (!canvas) return;
+      const targetWidth = Math.max(1, Math.round(cropPixels.width));
+      const targetHeight = Math.max(1, Math.round(cropPixels.height));
       canvas.width = targetWidth;
       canvas.height = targetHeight;
-      canvas.style.width = `${Math.round(displayWidth)}px`;
-      canvas.style.height = `${displayHeight}px`;
+      canvas.style.width = "100%";
+      canvas.style.height = "100%";
       const context = canvas.getContext("2d");
+      if (!context) return;
+      context.imageSmoothingEnabled = false;
       context.clearRect(0, 0, canvas.width, canvas.height);
-      context.drawImage(cropCanvas, 0, 0);
+      const previewImage = await loadImageElement(cropResult.dataUrl);
+      context.drawImage(previewImage, 0, 0, targetWidth, targetHeight);
     } catch (error) {
       setCropPreviewImageUrl("");
       setCropPreviewDisplaySize(null);
@@ -1054,7 +1032,14 @@ function App() {
   function saveCrop() {
     if (!activeTemplate || !cropRect || !renderBox.width || !renderBox.height) return;
     pushHistorySnapshot();
-    const cropArea = normalizeRect(cropRect, renderBox.width, renderBox.height);
+    const resolvedPageSize = pageSize ?? { width: renderBox.width, height: renderBox.height };
+    const cropPixels = {
+      x: (cropRect.x / renderBox.width) * resolvedPageSize.width,
+      y: (cropRect.y / renderBox.height) * resolvedPageSize.height,
+      width: (cropRect.width / renderBox.width) * resolvedPageSize.width,
+      height: (cropRect.height / renderBox.height) * resolvedPageSize.height,
+    };
+    const cropArea = normalizeRect(cropPixels, resolvedPageSize.width, resolvedPageSize.height);
     const sourceType = activeTemplate.sourcePdf?.sourceType ?? "pdf";
     const cropPoints = pageSize
       ? {
@@ -1083,7 +1068,14 @@ function App() {
   function saveCropWithPrintSize(nextPrintSizeCm) {
     if (!activeTemplate || !cropRect || !renderBox.width || !renderBox.height) return;
     pushHistorySnapshot();
-    const cropArea = normalizeRect(cropRect, renderBox.width, renderBox.height);
+    const resolvedPageSize = pageSize ?? { width: renderBox.width, height: renderBox.height };
+    const cropPixels = {
+      x: (cropRect.x / renderBox.width) * resolvedPageSize.width,
+      y: (cropRect.y / renderBox.height) * resolvedPageSize.height,
+      width: (cropRect.width / renderBox.width) * resolvedPageSize.width,
+      height: (cropRect.height / renderBox.height) * resolvedPageSize.height,
+    };
+    const cropArea = normalizeRect(cropPixels, resolvedPageSize.width, resolvedPageSize.height);
     const sourceType = activeTemplate.sourcePdf?.sourceType ?? "pdf";
     const cropPoints = pageSize
       ? {
@@ -1830,7 +1822,7 @@ function App() {
         try {
           const rasterCrop = await renderPdfCropToPng(pdfDoc, sourcePageNumber, activeTemplate.cropArea);
           const embeddedImage = await outputDoc.embedPng(dataUrlToArrayBuffer(rasterCrop.dataUrl));
-          cropSize = { width: rasterCrop.width, height: rasterCrop.height };
+          cropSize = { width: rasterCrop.pointWidth, height: rasterCrop.pointHeight };
           drawTemplate = (page, position, metrics) => {
             page.drawImage(embeddedImage, {
               x: position.x,
@@ -1933,9 +1925,9 @@ function App() {
           height: variable.heightRatio * printMetrics.itemHeight,
         };
         const baseSize = Math.max(4, variable.style.fontSize * printMetrics.variableScale);
-        const fitWidth = textRotation === 90 || textRotation === 270 ? box.height : box.width;
-        const fitHeight = textRotation === 90 || textRotation === 270 ? box.width : box.height;
-        const size = fitFontSize(text, baseSize, fitWidth, fitHeight, variable.style.autoFit, drawFont);
+        // The printed size must equal what the designer shows and what the field config says.
+        // Auto-shrinking here made the PDF disagree with both, so the configured size wins.
+        const size = baseSize;
         const textWidth = drawFont.widthOfTextAtSize(text, size);
         if (variable.style.backgroundColor && variable.style.backgroundColor !== "transparent") {
           outputPage.drawRectangle({
@@ -3127,7 +3119,7 @@ function TemplateCanvas({
   dragGuides = { x: [], y: [] },
 }) {
   const editable = Boolean(beginVariableDrag);
-  const previewStyle = cropPreviewDisplaySize
+  const stageStyle = cropPreviewDisplaySize
     ? { width: `${cropPreviewDisplaySize.width}px`, height: `${cropPreviewDisplaySize.height}px` }
     : undefined;
   const cropSize = getCropPointSize(template);
@@ -3136,8 +3128,8 @@ function TemplateCanvas({
     : 0.72;
   if (!editable) {
     return (
-      <div className="crop-preview" ref={cropPreviewRef} style={previewStyle}>
-        <div className="crop-preview-stage">
+      <div className="crop-preview" ref={cropPreviewRef}>
+        <div className="crop-preview-stage" style={stageStyle}>
           <PaperTemplateSlot
             template={template}
             cropImageUrl={cropImageUrl}
@@ -3150,8 +3142,8 @@ function TemplateCanvas({
     );
   }
   return (
-    <div className="crop-preview" ref={cropPreviewRef} style={previewStyle}>
-      <div className="crop-preview-stage">
+    <div className="crop-preview" ref={cropPreviewRef}>
+      <div className="crop-preview-stage" style={stageStyle}>
         <canvas className="crop-preview-canvas" />
         <div
           className="variable-layer"
@@ -3300,7 +3292,7 @@ function VariableEditor({ variable, mappingSource, updateVariableSource, updateV
         <p className="muted">{t("designer.selectVariableToEdit")}</p>
       </div>
       <div className="form-grid compact-form">
-        <label>{t("field.fontSize")}<input type="number" min="4" value={variable.style.fontSize} onChange={(event) => updateVariableStyle({ fontSize: Number(event.target.value) })} /></label>
+        <label>{t("field.fontSize")}<input type="number" min="4" value={variable.style.fontSize} onChange={(event) => updateVariableStyle({ fontSize: Number(event.target.value) })} /><span className="field-size-hint">{`${(Number(variable.style.fontSize) * 25.4 / 72).toFixed(1)} mm`}</span></label>
         <label>{t("field.weight")}<select value={variable.style.fontWeight} onChange={(event) => updateVariableStyle({ fontWeight: event.target.value })}><option value="normal">{t("field.weight.normal")}</option><option value="bold">{t("field.weight.bold")}</option></select></label>
         <label>{t("field.rotation")}<select value={normalizeTextRotation(variable.style.textRotation)} onChange={(event) => updateVariableStyle({ textRotation: Number(event.target.value) })}><option value="0">{t("field.rotation.0")}</option><option value="90">{t("field.rotation.90")}</option><option value="180">{t("field.rotation.180")}</option><option value="270">{t("field.rotation.270")}</option></select></label>
         <label>{t("field.textAlign")}<select value={variable.style.textAlign} onChange={(event) => updateVariableStyle({ textAlign: event.target.value })}><option value="left">{t("field.align.left")}</option><option value="center">{t("field.align.center")}</option><option value="right">{t("field.align.right")}</option></select></label>
@@ -3334,7 +3326,6 @@ function VariableEditor({ variable, mappingSource, updateVariableSource, updateV
           </div>
         </div>
       </div>
-      <label className="check"><input type="checkbox" checked={variable.style.autoFit} onChange={(event) => updateVariableStyle({ autoFit: event.target.checked })} /> {t("field.autoFit")}</label>
       <div className="field-editor-actions">
         <button onClick={duplicateVariable} title={t("button.duplicate")} aria-label={t("button.duplicate")}>
           <Copy size={16} /> <span className="action-label">{t("button.duplicate")}</span>
@@ -4804,7 +4795,7 @@ function PaperTemplateSlot({ template, cropImageUrl, previewValues, style, fontS
               height: `${variable.heightRatio * 100}%`,
               color: variable.style.color,
               backgroundColor: resolveFieldBackgroundColor(variable.style.backgroundColor, "transparent"),
-              fontSize: Math.max(5, variable.style.fontSize * fontScale),
+              fontSize: Math.max(0.5, variable.style.fontSize * fontScale),
               fontWeight: variable.style.fontWeight,
               justifyContent: justify(variable.style.textAlign),
               alignItems: align(variable.style.verticalAlign),
@@ -5023,6 +5014,12 @@ function migrateTemplatesWithLegacyMappings(templates, legacyMappings = {}, pref
   });
 }
 
+// Header matching is tolerant of case, width (full/half), spaces, underscores and hyphens.
+// Exact matches are always preferred; this only rescues headers that would otherwise go unmapped.
+function normalizeHeaderName(value) {
+  return String(value ?? "").normalize("NFKC").replace(/[\s\u3000_-]+/g, "").toLowerCase();
+}
+
 function resolveTemplateCsvHeaderMapping(template, dataset, activeCsvId, legacyMappings = {}) {
   if (!template) return {};
   const templateMapping = sanitizeTemplateCsvHeaderMapping(template.csvHeaderMapping);
@@ -5030,13 +5027,28 @@ function resolveTemplateCsvHeaderMapping(template, dataset, activeCsvId, legacyM
   const legacy = extractLegacyTemplateMapping(legacyMappings, template.templateId, activeCsvId);
   if (Object.keys(legacy).length) return legacy;
 
-  const headers = new Set((dataset?.headers ?? []).map((header) => String(header).trim()));
-  if (!headers.size) return {};
+  const headerList = (dataset?.headers ?? []).map((header) => String(header ?? "").trim()).filter(Boolean);
+  if (!headerList.length) return {};
+  const exactHeaders = new Set(headerList);
+  const looseHeaders = new Map();
+  headerList.forEach((header) => {
+    const key = normalizeHeaderName(header);
+    if (key && !looseHeaders.has(key)) looseHeaders.set(key, header);
+  });
   return template.variables.reduce((acc, variable) => {
     const candidates = [variable.displayName, variable.key]
       .map((item) => String(item ?? "").trim())
       .filter(Boolean);
-    const matchedHeader = candidates.find((name) => headers.has(name));
+    let matchedHeader = candidates.find((name) => exactHeaders.has(name));
+    if (!matchedHeader) {
+      for (const name of candidates) {
+        const looseHit = looseHeaders.get(normalizeHeaderName(name));
+        if (looseHit) {
+          matchedHeader = looseHit;
+          break;
+        }
+      }
+    }
     if (matchedHeader) acc[variable.id] = matchedHeader;
     return acc;
   }, {});
@@ -5255,9 +5267,9 @@ function getCropPointSize(template, fallbackPageSize = null) {
   };
 }
 
-function getPrintedTemplateSize(layout, cropSize) {
+function getPrintedTemplateSize(layout, cropSize, templatePrintSizeCm = null) {
   if (!cropSize) return null;
-  const metrics = getPrintMetrics(layout, cropSize, null);
+  const metrics = getPrintMetrics(layout, cropSize, templatePrintSizeCm);
   if (!metrics.valid) return null;
   return { width: metrics.itemWidth, height: metrics.itemHeight };
 }
@@ -5449,10 +5461,38 @@ function loadPdfJsDocumentTask(data) {
   });
 }
 
+async function renderImageCropToPng(sourcePdf, cropArea) {
+  const sourceImage = await loadImageElement(sourceDataUrl(sourcePdf));
+  const imageWidth = Math.max(1, sourceImage.naturalWidth || sourceImage.width || 1);
+  const imageHeight = Math.max(1, sourceImage.naturalHeight || sourceImage.height || 1);
+  const cropX = clampNumber(Math.round(cropArea.xRatio * imageWidth), 0, imageWidth - 1);
+  const cropY = clampNumber(Math.round(cropArea.yRatio * imageHeight), 0, imageHeight - 1);
+  const cropWidth = clampNumber(Math.round(cropArea.widthRatio * imageWidth), 1, imageWidth - cropX);
+  const cropHeight = clampNumber(Math.round(cropArea.heightRatio * imageHeight), 1, imageHeight - cropY);
+  const cropCanvas = document.createElement("canvas");
+  cropCanvas.width = cropWidth;
+  cropCanvas.height = cropHeight;
+  const cropContext = cropCanvas.getContext("2d", { willReadFrequently: false });
+  if (!cropContext) throw new Error("Failed to create image crop canvas context");
+  cropContext.imageSmoothingEnabled = false;
+  cropContext.drawImage(sourceImage, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
+  return {
+    dataUrl: cropCanvas.toDataURL("image/png"),
+    width: Math.max(1, cropWidth),
+    height: Math.max(1, cropHeight),
+  };
+}
+
 async function renderPdfCropToPng(pdfDocument, pageNumber, cropArea) {
   const page = await pdfDocument.getPage(pageNumber ?? 1);
   const baseViewport = page.getViewport({ scale: 1 });
-  const cropPixels = ratioRectToPixels(cropArea, baseViewport.width, baseViewport.height);
+  const cropBox = pdfCropBoxFromRatios(cropArea, baseViewport.width, baseViewport.height);
+  const cropPixels = {
+    x: cropBox.x,
+    y: baseViewport.height - (cropBox.y + cropBox.height),
+    width: cropBox.width,
+    height: cropBox.height,
+  };
   const maxSide = Math.max(1, cropPixels.width, cropPixels.height);
   const scale = Math.max(1, Math.min(4, 2200 / maxSide));
   const viewport = page.getViewport({ scale });
@@ -5462,6 +5502,7 @@ async function renderPdfCropToPng(pdfDocument, pageNumber, cropArea) {
   sourceCanvas.height = Math.max(1, Math.round(viewport.height));
   const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: false });
   if (!sourceContext) throw new Error("Failed to create source canvas context");
+  sourceContext.imageSmoothingEnabled = false;
   await page.render({
     canvasContext: sourceContext,
     viewport,
@@ -5480,6 +5521,7 @@ async function renderPdfCropToPng(pdfDocument, pageNumber, cropArea) {
   cropCanvas.height = targetHeight;
   const cropContext = cropCanvas.getContext("2d", { willReadFrequently: false });
   if (!cropContext) throw new Error("Failed to create crop canvas context");
+  cropContext.imageSmoothingEnabled = false;
   cropContext.drawImage(
     sourceCanvas,
     sourceX,
@@ -5494,8 +5536,14 @@ async function renderPdfCropToPng(pdfDocument, pageNumber, cropArea) {
 
   return {
     dataUrl: cropCanvas.toDataURL("image/png"),
-    width: Math.max(1, cropPixels.width),
-    height: Math.max(1, cropPixels.height),
+    // Raster dimensions, in canvas pixels (crop points x render scale).
+    width: Math.max(1, targetWidth),
+    height: Math.max(1, targetHeight),
+    // The same crop in PDF points. Layout maths must use these: variable positions,
+    // itemWidth/itemHeight and font scaling all live in point space, so handing them
+    // the pixel size shrinks every field by the render scale.
+    pointWidth: Math.max(1, cropPixels.width),
+    pointHeight: Math.max(1, cropPixels.height),
   };
 }
 
@@ -5755,7 +5803,16 @@ function dataUrlToArrayBuffer(dataUrl) {
   return base64ToArrayBuffer(base64Payload);
 }
 
-createRoot(document.getElementById("root")).render(<App />);
+const rootElement = document.getElementById("root");
+if (!rootElement) {
+  throw new Error("Root element not found");
+}
+
+if (!rootElement.__ssflowRoot) {
+  rootElement.__ssflowRoot = createRoot(rootElement);
+}
+
+rootElement.__ssflowRoot.render(<App />);
 
 
 
