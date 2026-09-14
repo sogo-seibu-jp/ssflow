@@ -1922,7 +1922,7 @@ function App() {
       }
       activeTemplate.variables.forEach((variable) => {
         const source = activeMapping[variable.id];
-        const value = resolveMappedValue(source, row, activeTemplate.rules ?? []);
+        const value = resolveMappedValue(source, row, activeTemplate.rules ?? [], variable.key);
         const text = String(value !== "" ? value : variable.displayName ?? "");
         const drawFont = variable.style.fontWeight === "bold" ? boldFont : regularFont;
         const textRotation = normalizeTextRotation(variable.style.textRotation);
