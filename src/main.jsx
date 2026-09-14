@@ -3153,7 +3153,6 @@ function TemplateCanvas({
     <div className="crop-preview" ref={cropPreviewRef} style={previewStyle}>
       <div className="crop-preview-stage">
         <canvas className="crop-preview-canvas" />
-        {cropImageUrl ? <img className="crop-preview-image" src={cropImageUrl} alt="" /> : null}
         <div
           className="variable-layer"
           onPointerDown={(event) => {
