@@ -1598,13 +1598,13 @@ button:not(.primary) .spinner {
   word-break: break-word;
 }
 
-.variable-text,
 .field-size-hint {
   color: #5b7091;
   font-size: 11px;
   margin-top: 2px;
 }
 
+.variable-text,
 .paper-variable-text {
   display: inline-block;
   max-width: 100%;

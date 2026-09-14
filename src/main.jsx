@@ -783,8 +783,11 @@ function App() {
       const cropPixels = { width: cropResult.width, height: cropResult.height };
       const previewZoom = designerMode === "fields" ? fieldZoom : 1;
       const minPreviewWidth = window.innerWidth < 720 ? Math.max(220, window.innerWidth - 44) : 520;
-      const naturalWidth = Math.max(cropPixels.width, 1);
-      const naturalHeight = Math.max(cropPixels.height, 1);
+      // Display size must be derived from the crop in POINTS. cropPixels is the raster
+      // bitmap (crop points x render scale) and using it here scaled the designer text by
+      // the render scale instead of the true preview zoom.
+      const naturalWidth = Math.max(cropResult.pointWidth ?? cropPixels.width, 1);
+      const naturalHeight = Math.max(cropResult.pointHeight ?? cropPixels.height, 1);
       const baseWidth = Math.min(1100, Math.max(minPreviewWidth, naturalWidth));
       const displayWidth = Math.max(120, Math.min(4000, baseWidth * previewZoom));
       const displayScale = displayWidth / naturalWidth;
@@ -2955,6 +2958,7 @@ function DesignerPage(props) {
               cropImageUrl={cropPreviewImageUrl}
               cropPreviewDisplaySize={cropPreviewDisplaySize}
               dragGuides={dragGuides}
+              pageSize={pageSize}
             />
           </div>
         )}
@@ -3117,12 +3121,13 @@ function TemplateCanvas({
   cropImageUrl = "",
   cropPreviewDisplaySize = null,
   dragGuides = { x: [], y: [] },
+  pageSize = null,
 }) {
   const editable = Boolean(beginVariableDrag);
   const stageStyle = cropPreviewDisplaySize
     ? { width: `${cropPreviewDisplaySize.width}px`, height: `${cropPreviewDisplaySize.height}px` }
     : undefined;
-  const cropSize = getCropPointSize(template);
+  const cropSize = getCropPointSize(template, pageSize);
   const previewFontScale = cropSize && cropPreviewDisplaySize?.width
     ? cropPreviewDisplaySize.width / cropSize.width
     : 0.72;
@@ -5480,6 +5485,8 @@ async function renderImageCropToPng(sourcePdf, cropArea) {
     dataUrl: cropCanvas.toDataURL("image/png"),
     width: Math.max(1, cropWidth),
     height: Math.max(1, cropHeight),
+    pointWidth: Math.max(1, cropWidth),
+    pointHeight: Math.max(1, cropHeight),
   };
 }
 
