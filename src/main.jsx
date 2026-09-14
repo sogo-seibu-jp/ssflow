@@ -299,7 +299,6 @@ function App() {
   const canvasRef = useRef(null);
   const overlayRef = useRef(null);
   const cropPreviewRef = useRef(null);
-  const topChromeRef = useRef(null);
   const dragRef = useRef(null);
   const setupDragDepthRef = useRef(0);
   const designerDragDepthRef = useRef(0);
@@ -421,33 +420,6 @@ function App() {
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
-
-  useEffect(() => {
-    if (!workMode) {
-      document.documentElement.style.removeProperty("--top-chrome-offset");
-      return;
-    }
-    const topChrome = topChromeRef.current;
-    if (!topChrome) return;
-
-    const updateTopChromeOffset = () => {
-      const height = Math.ceil(topChrome.getBoundingClientRect().height);
-      document.documentElement.style.setProperty("--top-chrome-offset", `${height}px`);
-    };
-
-    updateTopChromeOffset();
-    window.addEventListener("resize", updateTopChromeOffset);
-
-    const resizeObserver = typeof ResizeObserver !== "undefined"
-      ? new ResizeObserver(updateTopChromeOffset)
-      : null;
-    resizeObserver?.observe(topChrome);
-
-    return () => {
-      window.removeEventListener("resize", updateTopChromeOffset);
-      resizeObserver?.disconnect();
-    };
-  }, [workMode, view, status, language]);
 
   useEffect(() => {
     if (workMode !== "print") return;
@@ -2017,7 +1989,7 @@ function App() {
   return (
     <div className="app-shell">
       <main className="main">
-        <div className="top-chrome" ref={topChromeRef}>
+        <div className="top-chrome">
           <header className="page-header">
             <div className="page-heading">
               <FileText size={28} />
