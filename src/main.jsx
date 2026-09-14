@@ -116,7 +116,7 @@ const FUNCTION_FIELD_NAMES = {
 const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/svg+xml", "image/webp"]);
 const IMAGE_FILE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "svg", "webp"]);
 const MAX_UPLOAD_BYTES = 3 * 1024 * 1024;
-const APP_VERSION = "v1.5002";
+const APP_VERSION = "v1.5003";
 const RESIZE_HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const SNAP_GRID_SIZE = 8;
 const SNAP_THRESHOLD = 6;
@@ -5420,8 +5420,10 @@ async function loadPdfFonts(outputDoc) {
     fetch(PDF_FONTS.regular).then(assertFontResponse).then((response) => response.arrayBuffer()),
     fetch(PDF_FONTS.bold).then(assertFontResponse).then((response) => response.arrayBuffer()),
   ]);
-  const regularFont = await outputDoc.embedFont(regularBytes, { subset: true });
-  const boldFont = await outputDoc.embedFont(boldBytes, { subset: true });
+  // Subsetting the bundled CJK fonts can trigger PDF encoding errors for glyphs that
+  // exceed the subset encoder's expected bounds during print generation.
+  const regularFont = await outputDoc.embedFont(regularBytes, { subset: false });
+  const boldFont = await outputDoc.embedFont(boldBytes, { subset: false });
   return { regularFont, boldFont };
 }
 
