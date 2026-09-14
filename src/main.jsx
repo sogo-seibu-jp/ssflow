@@ -223,30 +223,38 @@ function runtimeT(key, params = {}) {
   return makeTranslator(language === "ja" ? "ja" : "en")(key, params);
 }
 
+// `?lock=1` pins the app to print mode. This is a guardrail against accidents
+// on a shared store PC, NOT access control: the app is browser-local, so anyone
+// can edit the URL or open devtools. Do not present it to users as security.
 function parseAppRoute(search) {
   const params = new URLSearchParams(search || "");
+  const locked = params.get("lock") === "1";
   const mode = params.get("mode");
   const view = params.get("view");
-  const normalizedMode = mode === "design" || mode === "print" ? mode : "";
+  const normalizedMode = locked ? "print" : (mode === "design" || mode === "print" ? mode : "");
   const allowedViews = normalizedMode === "print"
     ? new Set(["template", "csv", "layout"])
     : new Set(["setup", "designer", "rules", "layout", "template"]);
   const defaultView = normalizedMode === "print" ? "template" : "setup";
   return {
+    locked,
     workMode: normalizedMode,
     view: view && allowedViews.has(view) ? view : defaultView,
   };
 }
 
-function buildAppUrl(workMode, view) {
-  if (!workMode) return window.location.pathname;
+function buildAppUrl(workMode, view, locked = false) {
+  // The lock must survive every step change, or the first click unlocks it.
+  if (!workMode) return locked ? `${window.location.pathname}?lock=1` : window.location.pathname;
   const params = new URLSearchParams();
   params.set("mode", workMode);
   if (view) params.set("view", view);
+  if (locked) params.set("lock", "1");
   return `${window.location.pathname}?${params.toString()}`;
 }
 
 function App() {
+  const [printLocked] = useState(() => parseAppRoute(window.location.search).locked);
   const [workMode, setWorkMode] = useState(() => {
     const route = parseAppRoute(window.location.search);
     if (route.workMode) return route.workMode;
@@ -404,12 +412,12 @@ function App() {
   }, [workMode]);
 
   useEffect(() => {
-    const target = buildAppUrl(workMode, view);
+    const target = buildAppUrl(workMode, view, printLocked);
     const current = `${window.location.pathname}${window.location.search}`;
     if (target !== current) {
       window.history.pushState({ workMode, view }, "", target);
     }
-  }, [workMode, view]);
+  }, [workMode, view, printLocked]);
 
   useEffect(() => {
     function onPopState() {
@@ -453,6 +461,19 @@ function App() {
   function setSelection(variableId, selectedIds = [variableId]) {
     setSelectedVariableId(variableId);
     setSelectedVariableIds(Array.from(new Set(selectedIds.filter(Boolean))));
+  }
+
+  // Store staff must be able to purge a roster (personal data under APPI)
+  // without destroying the templates HR built. clearAllSavedData stays on the
+  // design side only.
+  function clearCsvData() {
+    if (!window.confirm(t("status.clearCsvConfirm"))) return;
+    setCsvDatasets([]);
+    setActiveCsvId("");
+    setPreviewCsvId("");
+    setSelectedRowIds([]);
+    setRowCopies({});
+    setStatus(t("status.clearCsvDone"));
   }
 
   function clearAllSavedData() {
@@ -2003,8 +2024,14 @@ function App() {
             </div>
             <div className="header-actions">
               {status && <p className="status">{status}</p>}
-              <button onClick={() => setWorkMode("")}>{t("button.switchMode")}</button>
-              <button className="danger" onClick={clearAllSavedData}>{t("button.clearAllData")}</button>
+              {printLocked
+                ? <span className="lock-badge" title={t("lock.printOnlyHint")}>{t("lock.printOnly")}</span>
+                : <button onClick={() => setWorkMode("")}>{t("button.switchMode")}</button>}
+              {workMode === "print" ? (
+                <button className="danger" onClick={clearCsvData}>{t("button.clearCsvData")}</button>
+              ) : (
+                <button className="danger" onClick={clearAllSavedData}>{t("button.clearAllData")}</button>
+              )}
               <label className="language-select">
                 <select value={language} onChange={(event) => setLanguage(event.target.value)}>
                   <option value="en">{t("language.en")}</option>
@@ -2161,6 +2188,7 @@ function App() {
         {view === "template" && (
           <TemplatePackagePage
             workMode={workMode}
+            printLocked={printLocked}
             language={language}
             templates={templates}
             templatePreviewUrls={templatePreviewUrls}
@@ -2325,7 +2353,7 @@ function createEmptyRule() {
   };
 }
 
-function TemplatePackagePage({ workMode, language, templates, templatePreviewUrls, activeTemplateId, setActiveTemplateId, updateTemplate, deleteTemplate, exportTemplateFile, importTemplateFile, flowStatus, t }) {
+function TemplatePackagePage({ workMode, printLocked = false, language, templates, templatePreviewUrls, activeTemplateId, setActiveTemplateId, updateTemplate, deleteTemplate, exportTemplateFile, importTemplateFile, flowStatus, t }) {
   return (
     <section className="page-grid single-column">
       <div className="section-card">
@@ -2335,10 +2363,12 @@ function TemplatePackagePage({ workMode, language, templates, templatePreviewUrl
             <p className="muted">{t(workMode === "print" ? "templates.printSelectionHelp" : "templates.packageHelp")}</p>
             <p className="muted">{t("templates.packageStatus", { status: t(`templates.status.${flowStatus.template}`) })}</p>
           </div>
-          <label className={`button ui-button ${workMode === "print" ? "" : "primary"}`}>
-            <Upload size={16} /> {t("button.uploadTemplate")}
-            <input type="file" accept=".printtpl,application/json" onChange={importTemplateFile} />
-          </label>
+          {!printLocked && (
+            <label className={`button ui-button ${workMode === "print" ? "" : "primary"}`}>
+              <Upload size={16} /> {t("button.uploadTemplate")}
+              <input type="file" accept=".printtpl,application/json" onChange={importTemplateFile} />
+            </label>
+          )}
         </div>
         <div className="template-list">
           {templates.length === 0 && <EmptyState title={t("source.noTemplates")} text={t("source.noTemplatesText")} />}
@@ -2355,20 +2385,23 @@ function TemplatePackagePage({ workMode, language, templates, templatePreviewUrl
               <input
                 className="template-name-input"
                 value={template.templateName}
+                readOnly={printLocked}
                 onChange={(event) => updateTemplate(template.templateId, { templateName: event.target.value })}
               />
               <div className="template-row-actions">
                 <button onClick={() => exportTemplateFile(template.templateId)}>
                   <ArrowDownToLine size={16} /> {t("button.saveTemplatePackage")}
                 </button>
-                <button
-                  className="danger"
-                  aria-label={t("button.deleteTemplate")}
-                  title={t("button.deleteTemplate")}
-                  onClick={() => deleteTemplate(template.templateId)}
-                >
-                  <Trash2 size={16} /> {t("button.deleteTemplate")}
-                </button>
+                {!printLocked && (
+                  <button
+                    className="danger"
+                    aria-label={t("button.deleteTemplate")}
+                    title={t("button.deleteTemplate")}
+                    onClick={() => deleteTemplate(template.templateId)}
+                  >
+                    <Trash2 size={16} /> {t("button.deleteTemplate")}
+                  </button>
+                )}
               </div>
             </article>
           ))}

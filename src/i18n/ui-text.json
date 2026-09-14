@@ -407,7 +407,12 @@
     "printWindow.pdfNotGenerated": "The PDF couldn't be created. Check the original tab for details.",
     "printWindow.pdfGenerationFailed": "Couldn't create the PDF: {message}",
     "empty.startWithPdf": "Start with a source file",
-    "empty.startWithPdfText": "Add a source file, draw a crop area, and save it as a reusable template."
+    "empty.startWithPdfText": "Add a source file, draw a crop area, and save it as a reusable template.",
+    "button.clearCsvData": "Clear CSV data",
+    "status.clearCsvConfirm": "Remove all CSV files and row selections from this browser? Templates are kept.",
+    "status.clearCsvDone": "CSV data was cleared. Templates are unchanged.",
+    "lock.printOnly": "Print only",
+    "lock.printOnlyHint": "This link is set to print only. Ask HR for the full link to edit templates."
   },
   "ja": {
     "app.kicker": "ブラウザに保存",
@@ -817,6 +822,11 @@
     "printWindow.pdfNotGenerated": "PDFを作成できませんでした。元のタブで詳細をご確認ください。",
     "printWindow.pdfGenerationFailed": "PDFの作成に失敗しました：{message}",
     "empty.startWithPdf": "元ファイルから始めましょう",
-    "empty.startWithPdfText": "元ファイルを追加して切り抜き範囲を作成し、再利用できるテンプレートとして保存します。"
+    "empty.startWithPdfText": "元ファイルを追加して切り抜き範囲を作成し、再利用できるテンプレートとして保存します。",
+    "button.clearCsvData": "CSVデータを削除",
+    "status.clearCsvConfirm": "このブラウザからCSVファイルと選択した行をすべて削除しますか？テンプレートは残ります。",
+    "status.clearCsvDone": "CSVデータを削除しました。テンプレートはそのままです。",
+    "lock.printOnly": "印刷専用",
+    "lock.printOnlyHint": "このリンクは印刷専用です。テンプレートを編集する場合は人事に通常のリンクを確認してください。"
   }
 }

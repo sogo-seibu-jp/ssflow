@@ -4970,3 +4970,16 @@ th {
   }
 }
 
+
+
+/* Print-only badge. Replaces the mode switch when the URL carries ?lock=1. */
+.lock-badge {
+  background: #eef4ff;
+  border: 1px solid #c8d8f6;
+  border-radius: 999px;
+  color: #1c3f7a;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 5px 12px;
+  white-space: nowrap;
+}
