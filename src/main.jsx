@@ -125,6 +125,12 @@ const PT_PER_CM = 72 / 2.54;
 // Centimetres are entered and shown to 0.01 cm so millimetre values (and halves
 // of a millimetre) can be typed exactly; one decimal could not express 4.95 cm.
 const CM_INPUT_STEP = 0.01;
+// How many slots the sheet preview will draw. Pagination always uses the real
+// slots-per-page, so this only ever truncated the picture: a 4 x 11 grid drew
+// 24 tiles and looked like 6 rows. Small tags legitimately give 40+ per page,
+// so the ceiling is only here to stop a pathological grid rendering thousands
+// of tiles.
+const PREVIEW_MAX_SLOTS = 160;
 const CSS_PX_PER_PT = 96 / 72;
 const PREVIEW_RULER_LEFT_PX = 36;
 const PREVIEW_RULER_TOP_PX = 30;
@@ -4834,7 +4840,7 @@ function PrintSheetPreview({ layout, template, dataset, mapping, rows, rowCopies
                 ))}
               </div>
             ) : null}
-            {Array.from({ length: Math.min(slots, 24) }).map((_, index) => {
+            {Array.from({ length: Math.min(slots, PREVIEW_MAX_SLOTS) }).map((_, index) => {
               return (
                 <div key={index} className={`paper-slot ${previewRows[index] ? "filled" : ""}`}>
                   {previewRows[index] && template?.cropArea && (
