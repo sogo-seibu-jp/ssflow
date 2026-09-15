@@ -361,14 +361,20 @@ function App() {
     const saved = loadProject();
     if (!saved) return;
     const migratedTemplates = migrateTemplatesWithLegacyMappings(saved.templates ?? [], saved.mappings ?? {}, saved.activeCsvId ?? "");
-    setTemplates(migratedTemplates.map(({ savedPreviewImageUrl, ...template }) => template));
-    // Migration: templates created before the library carried their own rules.
-    setRuleLibrary(mergeRuleLists(
+    // Migration: templates created before the library carried their own rules,
+    // so the same rule arrives once per template. Collapse by content.
+    const hoistedRules = mergeRuleLists(
       saved.ruleLibrary ?? [],
       migratedTemplates.flatMap((template) => (Array.isArray(template?.rules) ? template.rules : [])),
-    ));
+    );
+    const { rules: libraryRules, aliases: ruleAliases } = dedupeRules(hoistedRules);
+    setRuleLibrary(libraryRules);
+    setTemplates(migratedTemplates.map(({ savedPreviewImageUrl, ...template }) => ({
+      ...template,
+      csvHeaderMapping: remapRuleSources(template.csvHeaderMapping, ruleAliases),
+    })));
     setActiveTemplateId(saved.activeTemplateId ?? saved.templates?.[0]?.templateId ?? "");
-    setMappings(saved.mappings ?? {});
+    setMappings(remapNestedRuleSources(saved.mappings ?? {}, ruleAliases));
     setLayout(normalizeLayout(saved.printLayout ?? saved.layout ?? {}));
     setDesignLayout(normalizeLayout(saved.designLayout ?? saved.layout ?? {}));
 
@@ -409,7 +415,7 @@ function App() {
       });
       return changed ? next : items;
     });
-  }, [ruleLibrary]);
+  }, [ruleLibrary, templates]);
 
   useEffect(() => {
     const csvSession = {
@@ -929,7 +935,10 @@ function App() {
       printSizeCm: null,
       savedLayout: null,
       csvHeaderMapping: {},
-      rules: [],
+      // Start from the shared library so the rule dropdown in the field config
+      // is populated straight away, instead of only after the library next
+      // changes and the mirror effect runs.
+      rules: ruleLibrary.map((rule) => ({ ...rule })),
       savedAt: "",
       variables: [],
       createdAt: new Date().toISOString(),
@@ -1801,12 +1810,19 @@ function App() {
       };
       // Merge before the mirror effect runs, or the imported template's own
       // rules would be overwritten by a library that has not seen them yet.
-      setRuleLibrary((current) => mergeRuleLists(current, nextTemplate.rules));
-      setTemplates((items) => [nextTemplate, ...items]);
+      // Collapsing here stops re-importing a template from stacking up copies.
+      const mergedLibrary = mergeRuleLists(ruleLibrary, nextTemplate.rules);
+      const { rules: nextLibrary, aliases: importAliases } = dedupeRules(mergedLibrary);
+      setRuleLibrary(nextLibrary);
+      const importedTemplate = {
+        ...nextTemplate,
+        csvHeaderMapping: remapRuleSources(nextTemplate.csvHeaderMapping, importAliases),
+      };
+      setTemplates((items) => [importedTemplate, ...items]);
       if (imported.savedPreviewImageUrl) {
         void setTemplatePreviewUrl(nextTemplateId, imported.savedPreviewImageUrl);
       }
-      setActiveTemplateId(nextTemplate.templateId);
+      setActiveTemplateId(importedTemplate.templateId);
       if (importedLayout) {
         if (workMode === "design") setDesignLayout(importedLayout);
         else setLayout(importedLayout);
@@ -2255,9 +2271,10 @@ function RulesPage({ rules: ruleList, setRules, t }) {
       tokenIndex: Number(draft.tokenIndex ?? 0) || 0,
       fallback: draft.fallback || "",
     };
+    const alreadyExists = !editingId && rules.some((rule) => ruleSignature(rule) === ruleSignature(nextRule));
     const nextRules = editingId
       ? rules.map((rule) => (rule.id === editingId ? nextRule : rule))
-      : [...rules, nextRule];
+      : (alreadyExists ? rules : [...rules, nextRule]);
     setRules(nextRules);
     setDraft(createEmptyRule());
     setEditingId("");
@@ -5254,6 +5271,71 @@ function mergeRuleLists(primary, extra) {
     out.push({ ...rule });
   });
   return out;
+}
+
+// Two rules are the same rule when everything a user can set matches. Hoisting
+// rules out of every template produced one copy per template -- identical
+// settings, different UUID -- so the library has to collapse by content, not id.
+function ruleSignature(rule) {
+  return JSON.stringify([
+    String(rule?.name ?? "").trim(),
+    rule?.delimiter ?? "space",
+    rule?.customDelimiter ?? "",
+    rule?.action ?? "last-token",
+    Number(rule?.tokenIndex ?? 0) || 0,
+    rule?.fallback ?? "",
+    rule?.sourceHeader ?? "",
+  ]);
+}
+
+// Keeps the first id of each group as canonical and returns `aliases` mapping
+// every dropped id onto it, so mappings that pointed at a collapsed copy keep
+// resolving instead of silently rendering blank.
+function dedupeRules(rules) {
+  const canonicalBySignature = new Map();
+  const aliases = {};
+  const out = [];
+  (Array.isArray(rules) ? rules : []).forEach((rule) => {
+    if (!rule || !rule.id) return;
+    const signature = ruleSignature(rule);
+    const canonical = canonicalBySignature.get(signature);
+    if (canonical) {
+      if (canonical !== rule.id) aliases[rule.id] = canonical;
+      return;
+    }
+    canonicalBySignature.set(signature, rule.id);
+    out.push({ ...rule });
+  });
+  return { rules: out, aliases };
+}
+
+function remapRuleSources(mapping, aliases) {
+  if (!mapping || typeof mapping !== "object" || !Object.keys(aliases ?? {}).length) return mapping;
+  let changed = false;
+  const next = {};
+  Object.entries(mapping).forEach(([key, source]) => {
+    if (isRuleSource(source)) {
+      const id = String(source).replace(RULE_SOURCE_PREFIX, "");
+      if (aliases[id]) {
+        next[key] = ruleSourceId(aliases[id]);
+        changed = true;
+        return;
+      }
+    }
+    next[key] = source;
+  });
+  return changed ? next : mapping;
+}
+
+// `mappings` is { "templateId::csvId": { variableKey: source } }.
+function remapNestedRuleSources(mappings, aliases) {
+  if (!mappings || typeof mappings !== "object" || !Object.keys(aliases ?? {}).length) return mappings;
+  return Object.fromEntries(
+    Object.entries(mappings).map(([key, value]) => [
+      key,
+      value && typeof value === "object" ? remapRuleSources(value, aliases) : value,
+    ]),
+  );
 }
 
 function ruleSourceId(ruleId) {
