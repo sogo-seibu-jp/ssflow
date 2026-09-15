@@ -4986,3 +4986,14 @@ th {
   padding: 5px 12px;
   white-space: nowrap;
 }
+
+
+/* Numeric entry under the auto-placement sliders. */
+.distance-number-row {
+  margin-top: 6px;
+}
+
+.distance-control .distance-number-row .distance-input-wrap input {
+  text-align: center;
+  width: 100%;
+}

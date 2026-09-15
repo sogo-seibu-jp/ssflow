@@ -412,7 +412,11 @@
     "status.clearCsvConfirm": "Remove all CSV files and row selections from this browser? Templates are kept.",
     "status.clearCsvDone": "CSV data was cleared. Templates are unchanged.",
     "lock.printOnly": "Print only",
-    "lock.printOnlyHint": "This link is set to print only. Ask HR for the full link to edit templates."
+    "lock.printOnlyHint": "This link is set to print only. Ask HR for the full link to edit templates.",
+    "print.error.horizontalOverflow": "The layout is wider than the paper.",
+    "print.error.verticalOverflow": "The layout is taller than the paper.",
+    "print.error.fitHint": "At this size {columns} across and {rows} down fit on the page.",
+    "preview.stepHint": "Click to change by 0.01 cm. Hold Shift for 0.1 cm."
   },
   "ja": {
     "app.kicker": "ブラウザに保存",
@@ -827,6 +831,10 @@
     "status.clearCsvConfirm": "このブラウザからCSVファイルと選択した行をすべて削除しますか？テンプレートは残ります。",
     "status.clearCsvDone": "CSVデータを削除しました。テンプレートはそのままです。",
     "lock.printOnly": "印刷専用",
-    "lock.printOnlyHint": "このリンクは印刷専用です。テンプレートを編集する場合は人事に通常のリンクを確認してください。"
+    "lock.printOnlyHint": "このリンクは印刷専用です。テンプレートを編集する場合は人事に通常のリンクを確認してください。",
+    "print.error.horizontalOverflow": "レイアウトが用紙の幅を超えています。",
+    "print.error.verticalOverflow": "レイアウトが用紙の高さを超えています。",
+    "print.error.fitHint": "この大きさでは、横{columns}枚・縦{rows}枚まで用紙に収まります。",
+    "preview.stepHint": "クリックで0.01cm単位。Shiftキーを押しながらで0.1cm単位です。"
   }
 }

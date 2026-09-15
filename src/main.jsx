@@ -122,6 +122,9 @@ const SNAP_GRID_SIZE = 8;
 const SNAP_THRESHOLD = 6;
 const HISTORY_LIMIT = 80;
 const PT_PER_CM = 72 / 2.54;
+// Centimetres are entered and shown to 0.01 cm so millimetre values (and halves
+// of a millimetre) can be typed exactly; one decimal could not express 4.95 cm.
+const CM_INPUT_STEP = 0.01;
 const CSS_PX_PER_PT = 96 / 72;
 const PREVIEW_RULER_LEFT_PX = 36;
 const PREVIEW_RULER_TOP_PX = 30;
@@ -1936,7 +1939,9 @@ function App() {
       : normalizeLayout(layout);
     const printMetrics = getPrintMetrics(layoutForOutput, cropSize, activeTemplate.printSizeCm);
     if (!printMetrics.valid) {
-      setStatus(t("status.layoutInvalid", { message: printMetrics.errors.join(" ") }));
+      setStatus(t("status.layoutInvalid", {
+        message: Array.from(new Set(printMetrics.errors)).map((key) => t(key)).join(" "),
+      }));
       return "";
     }
     const printableRows = getPrintableRowEntries(activeCsv, selectedRowIds);
@@ -2933,9 +2938,9 @@ function DesignerPage(props) {
                 <input
                   type="number"
                   min="0.1"
-                  step="0.1"
+                  step={CM_INPUT_STEP}
                   disabled={!cropRect}
-                  value={cropSizeDraft ? Number(cropSizeDraft.width || 0).toFixed(1) : ""}
+                  value={cropSizeDraft ? Number(cropSizeDraft.width || 0).toFixed(2) : ""}
                   onChange={(event) => {
                     const width = Math.max(0.1, Number(event.target.value) || 0.1);
                     updateCropSizeDraft({
@@ -2950,9 +2955,9 @@ function DesignerPage(props) {
                 <input
                   type="number"
                   min="0.1"
-                  step="0.1"
+                  step={CM_INPUT_STEP}
                   disabled={!cropRect}
-                  value={cropSizeDraft ? Number(cropSizeDraft.height || 0).toFixed(1) : ""}
+                  value={cropSizeDraft ? Number(cropSizeDraft.height || 0).toFixed(2) : ""}
                   onChange={(event) => {
                     const height = Math.max(0.1, Number(event.target.value) || 0.1);
                     updateCropSizeDraft({
@@ -3853,14 +3858,14 @@ function LayoutPage({
                     label={`${t("print.customPaperWidth")} (cm)`}
                     value={pointsToCmNumber(layout.customPaperWidth)}
                     min={1}
-                    step={0.1}
+                    step={CM_INPUT_STEP}
                     onChange={(value) => update("customPaperWidth", cmToPoints(value))}
                   />
                   <MetricControl
                     label={`${t("print.customPaperHeight")} (cm)`}
                     value={pointsToCmNumber(layout.customPaperHeight)}
                     min={1}
-                    step={0.1}
+                    step={CM_INPUT_STEP}
                     onChange={(value) => update("customPaperHeight", cmToPoints(value))}
                   />
                 </div>
@@ -3906,19 +3911,31 @@ function LayoutPage({
                       </div>
                     </div>
                     <div className="human-controls">
-                      <DistanceControl label={`${t("print.edgeSpace")} (cm)`} value={layout.marginX} min={0} max={80} onChange={(value) => updatePair("marginX", "marginY", value)} />
-                      <DistanceControl label={`${t("print.itemSpace")} (cm)`} value={layout.gapX} min={0} max={60} onChange={(value) => updatePair("gapX", "gapY", value)} />
+                      <DistanceControl label={`${t("print.edgeSpace")} (cm)`} value={layout.marginX} min={0} max={80} onChange={(value) => updatePair("marginX", "marginY", value)} t={t} />
+                      <DistanceControl label={`${t("print.itemSpace")} (cm)`} value={layout.gapX} min={0} max={60} onChange={(value) => updatePair("gapX", "gapY", value)} t={t} />
                     </div>
                   </>
                 ) : (
                   <div className="human-controls two-col">
-                  <Stepper label={t("print.itemsAcross")} value={layout.columns} min={1} max={8} onChange={(value) => update("columns", value)} t={t} />
-                  <Stepper label={t("print.itemsDown")} value={layout.rows} min={1} max={12} onChange={(value) => update("rows", value)} t={t} />
+                  {printMetrics.errors.length ? (
+                    <p className="status status-alert-red layout-overflow-warning">
+                      {Array.from(new Set(printMetrics.errors)).map((key) => t(key)).join(" ")}
+                      {" "}
+                      {t("print.error.fitHint", {
+                        rows: printMetrics.maxRowsThatFit,
+                        columns: printMetrics.maxColumnsThatFit,
+                      })}
+                    </p>
+                  ) : null}
+                  {/* The ceiling is whatever the paper holds at the current
+                      template size and gaps, not an arbitrary number. */}
+                  <Stepper label={t("print.itemsAcross")} value={layout.columns} min={1} max={Math.max(1, printMetrics.maxColumnsThatFit || 1)} onChange={(value) => update("columns", value)} t={t} />
+                  <Stepper label={t("print.itemsDown")} value={layout.rows} min={1} max={Math.max(1, printMetrics.maxRowsThatFit || 1)} onChange={(value) => update("rows", value)} t={t} />
                   <NumberAdjustField
                     label={`${t("print.templateWidth")} (cm)`}
                     value={pointsToCmNumber(layout.manualTemplateWidth)}
                     min={0.1}
-                    step={0.1}
+                    step={CM_INPUT_STEP}
                     onChange={(value) => update("manualTemplateWidth", cmToPoints(value))}
                     className="template-size-field"
                     t={t}
@@ -3927,7 +3944,7 @@ function LayoutPage({
                     label={`${t("print.templateHeight")} (cm)`}
                     value={pointsToCmNumber(layout.manualTemplateHeight)}
                     min={0.1}
-                    step={0.1}
+                    step={CM_INPUT_STEP}
                     onChange={(value) => update("manualTemplateHeight", cmToPoints(value))}
                     className="template-size-field"
                     t={t}
@@ -4121,23 +4138,84 @@ function Stepper({ label, value, min, max, onChange, t }) {
   );
 }
 
-function DistanceControl({ label, value, min, max, onChange }) {
+// Auto placement used to offer only a slider, so a value could not be typed at
+// all -- and a range input steps in whole points (~0.035 cm). The slider stays
+// for coarse dragging; the number box beside it takes an exact cm value to the
+// same 0.01 precision as the manual fields.
+function DistanceControl({ label, value, min, max, onChange, t }) {
   const minCm = pointsToCmNumber(min);
   const maxCm = pointsToCmNumber(max);
+  const valueCm = pointsToCmNumber(value);
+  const [draft, setDraft] = useState(null);
+
+  const applyCm = (rawValue) => {
+    const nextCm = clampNumber(Number(rawValue) || 0, minCm, maxCm);
+    onChange(cmToPoints(nextCm));
+  };
+  const stepBy = (deltaCm) => {
+    setDraft(null);
+    applyCm(valueCm + deltaCm);
+  };
 
   return (
     <label className="control-tile distance-control">
       <span>{label}</span>
       <div className="distance-slider-row">
         <small>{minCm.toFixed(1)}</small>
-        <input type="range" value={value} min={min} max={max} onChange={(event) => onChange(Number(event.target.value))} />
+        <input
+          type="range"
+          value={value}
+          min={min}
+          max={max}
+          step={cmToPoints(CM_INPUT_STEP)}
+          onChange={(event) => {
+            setDraft(null);
+            onChange(Number(event.target.value));
+          }}
+        />
         <small>{maxCm.toFixed(1)}</small>
+      </div>
+      <div className="number-adjust-wrap distance-number-row">
+        <button
+          type="button"
+          className="number-adjust-btn"
+          onClick={(event) => stepBy(-CM_INPUT_STEP * (event.shiftKey ? 10 : 1))}
+          aria-label={t ? t("preview.decreaseValue") : "Decrease value"}
+          title={t ? t("preview.stepHint") : ""}
+        >
+          -
+        </button>
+        <div className="distance-input-wrap">
+          <input
+            type="number"
+            min={minCm}
+            max={maxCm}
+            step={CM_INPUT_STEP}
+            value={draft ?? valueCm.toFixed(2)}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              applyCm(event.target.value);
+            }}
+            onBlur={() => setDraft(null)}
+          />
+        </div>
+        <button
+          type="button"
+          className="number-adjust-btn"
+          onClick={(event) => stepBy(CM_INPUT_STEP * (event.shiftKey ? 10 : 1))}
+          aria-label={t ? t("preview.increaseValue") : "Increase value"}
+          title={t ? t("preview.stepHint") : ""}
+        >
+          +
+        </button>
       </div>
     </label>
   );
 }
 
-function MetricControl({ label, value, min = 0, step = 0.1, onChange, readOnly = false, disabled = false }) {
+function MetricControl({ label, value, min = 0, step = CM_INPUT_STEP, onChange, readOnly = false, disabled = false }) {
+  // Same reason as NumberAdjustField: do not reformat mid-keystroke.
+  const [draft, setDraft] = useState(null);
   return (
     <label className="control-tile">
       <span>{label}</span>
@@ -4146,10 +4224,14 @@ function MetricControl({ label, value, min = 0, step = 0.1, onChange, readOnly =
           type="number"
           min={min}
           step={step}
-          value={Number(value).toFixed(1)}
+          value={draft ?? Number(value).toFixed(2)}
           readOnly={readOnly}
           disabled={disabled}
-          onChange={(event) => onChange(Math.max(min, Number(event.target.value) || min))}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            onChange(Math.max(min, Number(event.target.value) || min));
+          }}
+          onBlur={() => setDraft(null)}
         />
       </div>
     </label>
@@ -4161,7 +4243,7 @@ function NumberAdjustField({
   value,
   min = 0,
   max = Number.POSITIVE_INFINITY,
-  step = 0.1,
+  step = CM_INPUT_STEP,
   onChange,
   disabled = false,
   compact = false,
@@ -4169,9 +4251,18 @@ function NumberAdjustField({
   t,
 }) {
   const safeMax = Number.isFinite(max) ? max : Number.POSITIVE_INFINITY;
+  // While the field has focus the raw keystrokes are shown, not the formatted
+  // value. Re-formatting on every keystroke rewrites "4" as "4.00" and pushes
+  // the caret past the decimals, which makes a two-decimal value very hard to
+  // type. On blur the canonical value comes back.
+  const [draft, setDraft] = useState(null);
   const applyValue = (rawValue) => {
     const next = clampNumber(Number(rawValue) || min, min, safeMax);
     onChange(next);
+  };
+  const stepBy = (delta) => {
+    setDraft(null);
+    applyValue(value + delta);
   };
 
   return (
@@ -4182,9 +4273,9 @@ function NumberAdjustField({
           type="button"
           className="number-adjust-btn"
           disabled={disabled}
-          onClick={() => applyValue(value - step)}
+          onClick={(event) => stepBy(-step * (event.shiftKey ? 10 : 1))}
           aria-label={t("preview.decreaseValue")}
-          title={t("preview.decreaseValue")}
+          title={t("preview.stepHint")}
         >
           -
         </button>
@@ -4193,19 +4284,23 @@ function NumberAdjustField({
             type="number"
             min={min}
             max={Number.isFinite(safeMax) ? safeMax : undefined}
-            step={step}
-            value={value.toFixed(1)}
+            step={CM_INPUT_STEP}
+            value={draft ?? value.toFixed(2)}
             disabled={disabled}
-            onChange={(event) => applyValue(event.target.value)}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              applyValue(event.target.value);
+            }}
+            onBlur={() => setDraft(null)}
           />
         </div>
         <button
           type="button"
           className="number-adjust-btn"
           disabled={disabled}
-          onClick={() => applyValue(value + step)}
+          onClick={(event) => stepBy(step * (event.shiftKey ? 10 : 1))}
           aria-label={t("preview.increaseValue")}
-          title={t("preview.increaseValue")}
+          title={t("preview.stepHint")}
         >
           +
         </button>
@@ -4261,7 +4356,7 @@ function ManualPositionControl({
             value={leftCm}
             min={0}
             max={safeMaxLeftCm}
-            step={0.1}
+            step={CM_INPUT_STEP}
             onChange={onLeftChange}
             t={t}
           />
@@ -4270,7 +4365,7 @@ function ManualPositionControl({
             value={topCm}
             min={0}
             max={safeMaxTopCm}
-            step={0.1}
+            step={CM_INPUT_STEP}
             onChange={onTopChange}
             t={t}
           />
@@ -4327,8 +4422,8 @@ function ManualPositionControl({
       <div className="manual-metrics-panel">
         <div className="manual-space-remaining" aria-live="polite">
           <strong>{t("preview.spaceRemaining")}</strong>
-          <span>{t("print.autoBottomY")} {autoBottomCm.toFixed(1)} cm</span>
-          <span>{t("print.autoRightBelowX")} {rightBelowCm.toFixed(1)} cm</span>
+          <span>{t("print.autoBottomY")} {autoBottomCm.toFixed(2)} cm</span>
+          <span>{t("print.autoRightBelowX")} {rightBelowCm.toFixed(2)} cm</span>
           <button
             type="button"
             className="manual-space-reset"
@@ -4364,7 +4459,7 @@ function ManualGapControl({ gapXCm, gapYCm, maxGapXCm, maxGapYCm, autoGapX = fal
           value={gapXCm}
           min={0}
           max={safeMaxGapXCm}
-          step={0.1}
+          step={CM_INPUT_STEP}
           onChange={onGapXChange}
           disabled={autoGapX}
           compact
@@ -4375,7 +4470,7 @@ function ManualGapControl({ gapXCm, gapYCm, maxGapXCm, maxGapYCm, autoGapX = fal
           value={gapYCm}
           min={0}
           max={safeMaxGapYCm}
-          step={0.1}
+          step={CM_INPUT_STEP}
           onChange={onGapYChange}
           compact
           t={t}
@@ -4708,9 +4803,9 @@ function PrintSheetPreview({ layout, template, dataset, mapping, rows, rowCopies
                   style={{ left: `${rulerOffsetLeft + guide * scale}px` }}
                   onMouseDown={(event) => startMeasurementGuideDrag("x", event, index)}
                   onDoubleClick={() => removeMeasurementGuide("x", index)}
-                  title={`${pointsToCmNumber(guide).toFixed(1)} cm`}
+                  title={`${pointsToCmNumber(guide).toFixed(2)} cm`}
                 >
-                  <span>{pointsToCmNumber(guide).toFixed(1)} cm</span>
+                  <span>{pointsToCmNumber(guide).toFixed(2)} cm</span>
                 </button>
               ))}
               {measurementGuides.y.map((guide, index) => (
@@ -4721,9 +4816,9 @@ function PrintSheetPreview({ layout, template, dataset, mapping, rows, rowCopies
                   style={{ top: `${rulerOffsetTop + guide * scale}px` }}
                   onMouseDown={(event) => startMeasurementGuideDrag("y", event, index)}
                   onDoubleClick={() => removeMeasurementGuide("y", index)}
-                  title={`${pointsToCmNumber(guide).toFixed(1)} cm`}
+                  title={`${pointsToCmNumber(guide).toFixed(2)} cm`}
                 >
-                  <span>{pointsToCmNumber(guide).toFixed(1)} cm</span>
+                  <span>{pointsToCmNumber(guide).toFixed(2)} cm</span>
                 </button>
               ))}
             </>
@@ -4761,7 +4856,7 @@ function PrintSheetPreview({ layout, template, dataset, mapping, rows, rowCopies
               <button type="button" className="preview-manual-overlay" style={manualOverlayStyle} onMouseDown={startManualOverlayDrag} title={t("preview.dragToMove")}>
                 <span className="preview-manual-overlay-tag">{t("preview.firstItem")}</span>
                 <span className="preview-manual-overlay-value">
-                  {t("preview.leftX")} {pointsToCmNumber(layout.manualLeft).toFixed(1)} cm · {t("preview.topY")} {pointsToCmNumber(layout.manualTop).toFixed(1)} cm
+                  {t("preview.leftX")} {pointsToCmNumber(layout.manualLeft).toFixed(2)} cm · {t("preview.topY")} {pointsToCmNumber(layout.manualTop).toFixed(2)} cm
                 </span>
               </button>
             )}
@@ -4772,7 +4867,7 @@ function PrintSheetPreview({ layout, template, dataset, mapping, rows, rowCopies
                 style={manualGapXHandleStyle}
                 onMouseDown={(event) => startManualGapDrag("x", event)}
               >
-                <span>↔ {pointsToCmNumber(metrics.gapX).toFixed(1)} cm</span>
+                <span>↔ {pointsToCmNumber(metrics.gapX).toFixed(2)} cm</span>
               </button>
             )}
             {manualGapYHandleStyle && (
@@ -4782,7 +4877,7 @@ function PrintSheetPreview({ layout, template, dataset, mapping, rows, rowCopies
                 style={manualGapYHandleStyle}
                 onMouseDown={(event) => startManualGapDrag("y", event)}
               >
-                <span>↕ {pointsToCmNumber(metrics.gapY).toFixed(1)} cm</span>
+                <span>↕ {pointsToCmNumber(metrics.gapY).toFixed(2)} cm</span>
               </button>
             )}
           </div>
@@ -5450,15 +5545,20 @@ function getPrintMetrics(layout, cropSize, templatePrintSizeCm = null) {
     const usedWidth = usedWidthNoRight + rightGap;
     const usedHeight = topGap + rows * itemHeight + Math.max(0, rows - 1) * gapY;
     const bottomGap = paper.height - usedHeight;
-    if (layout.manualAutoGapX && columnGaps > 0 && availableGapWidth < -0.01) errors.push("Horizontal size exceeds paper.");
-    if (rightGapRaw < -0.01) errors.push("Horizontal size exceeds paper.");
-    if (usedWidth - paper.width > 0.01) errors.push("Horizontal size exceeds paper.");
-    if (bottomGap < -0.01) errors.push("Vertical size exceeds paper.");
+    // Keys, not sentences: translated where they are shown (ui-text.json rule).
+    if (layout.manualAutoGapX && columnGaps > 0 && availableGapWidth < -0.01) errors.push("print.error.horizontalOverflow");
+    if (rightGapRaw < -0.01) errors.push("print.error.horizontalOverflow");
+    if (usedWidth - paper.width > 0.01) errors.push("print.error.horizontalOverflow");
+    if (bottomGap < -0.01) errors.push("print.error.verticalOverflow");
     const valid = errors.length === 0;
     const safeBottom = Math.max(0, bottomGap);
+    const pitchY = itemHeight + gapY;
+    const pitchX = itemWidth + gapX;
     return {
       valid,
       errors,
+      maxRowsThatFit: pitchY > 0 ? Math.max(0, Math.floor((paper.height - topGap + gapY) / pitchY)) : 0,
+      maxColumnsThatFit: pitchX > 0 ? Math.max(0, Math.floor((paper.width - leftGap - manualRight + gapX) / pitchX)) : 0,
       printMode,
       paper,
       columns,
@@ -5521,7 +5621,7 @@ function getPrintMetrics(layout, cropSize, templatePrintSizeCm = null) {
 }
 
 function pointsToCm(points) {
-  return ((points / 72) * 2.54).toFixed(1);
+  return ((points / 72) * 2.54).toFixed(2);
 }
 
 function pointsToCmNumber(points) {
