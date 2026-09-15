@@ -116,7 +116,7 @@ const FUNCTION_FIELD_NAMES = {
 const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/svg+xml", "image/webp"]);
 const IMAGE_FILE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "svg", "webp"]);
 const MAX_UPLOAD_BYTES = 3 * 1024 * 1024;
-const APP_VERSION = "v1.5007";
+const APP_VERSION = "v1.5008";
 const RESIZE_HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const SNAP_GRID_SIZE = 8;
 const SNAP_THRESHOLD = 6;
@@ -255,6 +255,7 @@ function buildAppUrl(workMode, view, locked = false) {
 
 function App() {
   const [printLocked] = useState(() => parseAppRoute(window.location.search).locked);
+  const [ruleLibrary, setRuleLibrary] = useState([]);
   const [workMode, setWorkMode] = useState(() => {
     const route = parseAppRoute(window.location.search);
     if (route.workMode) return route.workMode;
@@ -361,6 +362,11 @@ function App() {
     if (!saved) return;
     const migratedTemplates = migrateTemplatesWithLegacyMappings(saved.templates ?? [], saved.mappings ?? {}, saved.activeCsvId ?? "");
     setTemplates(migratedTemplates.map(({ savedPreviewImageUrl, ...template }) => template));
+    // Migration: templates created before the library carried their own rules.
+    setRuleLibrary(mergeRuleLists(
+      saved.ruleLibrary ?? [],
+      migratedTemplates.flatMap((template) => (Array.isArray(template?.rules) ? template.rules : [])),
+    ));
     setActiveTemplateId(saved.activeTemplateId ?? saved.templates?.[0]?.templateId ?? "");
     setMappings(saved.mappings ?? {});
     setLayout(normalizeLayout(saved.printLayout ?? saved.layout ?? {}));
@@ -383,11 +389,27 @@ function App() {
       layout,
       printLayout: layout,
       designLayout,
+      ruleLibrary,
     });
     if (!ok) {
       setStatus(t("status.storageQuotaExceeded"));
     }
-  }, [templates, activeTemplateId, mappings, layout, designLayout, t]);
+  }, [templates, activeTemplateId, mappings, layout, designLayout, ruleLibrary, t]);
+
+  // Mirror the library into every template. Assigning the library verbatim (not
+  // a union) is what lets a deleted rule actually disappear everywhere; imports
+  // merge their rules into the library first, so nothing is lost.
+  useEffect(() => {
+    setTemplates((items) => {
+      let changed = false;
+      const next = items.map((template) => {
+        if (JSON.stringify(template.rules ?? []) === JSON.stringify(ruleLibrary)) return template;
+        changed = true;
+        return { ...template, rules: ruleLibrary.map((rule) => ({ ...rule })) };
+      });
+      return changed ? next : items;
+    });
+  }, [ruleLibrary]);
 
   useEffect(() => {
     const csvSession = {
@@ -480,6 +502,7 @@ function App() {
     if (!window.confirm(t("status.clearDataConfirm"))) return;
     clearProject();
     setTemplates([]);
+    setRuleLibrary([]);
     setActiveTemplateId("");
     setCsvDatasets([]);
     setActiveCsvId("");
@@ -1776,6 +1799,9 @@ function App() {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
+      // Merge before the mirror effect runs, or the imported template's own
+      // rules would be overwritten by a library that has not seen them yet.
+      setRuleLibrary((current) => mergeRuleLists(current, nextTemplate.rules));
       setTemplates((items) => [nextTemplate, ...items]);
       if (imported.savedPreviewImageUrl) {
         void setTemplatePreviewUrl(nextTemplateId, imported.savedPreviewImageUrl);
@@ -2137,9 +2163,8 @@ function App() {
         )}
         {workMode === "design" && view === "rules" && (
           <RulesPage
-            template={activeTemplate}
-            updateTemplate={updateTemplate}
-            activeTemplateId={activeTemplateId}
+            rules={ruleLibrary}
+            setRules={setRuleLibrary}
             t={t}
           />
         )}
@@ -2211,13 +2236,14 @@ function App() {
   );
 }
 
-function RulesPage({ template, updateTemplate, activeTemplateId, t }) {
+// Edits the project-wide rule library. No template is required, so rules can be
+// built before the first template exists and are available to every one after.
+function RulesPage({ rules: ruleList, setRules, t }) {
   const [draft, setDraft] = useState(() => createEmptyRule());
   const [editingId, setEditingId] = useState("");
-  const rules = Array.isArray(template?.rules) ? template.rules : [];
+  const rules = Array.isArray(ruleList) ? ruleList : [];
 
   function commitDraft() {
-    if (!template || !template.templateId) return;
     const trimmedName = String(draft.name ?? "").trim();
     if (!trimmedName) return;
     const nextRule = {
@@ -2232,14 +2258,13 @@ function RulesPage({ template, updateTemplate, activeTemplateId, t }) {
     const nextRules = editingId
       ? rules.map((rule) => (rule.id === editingId ? nextRule : rule))
       : [...rules, nextRule];
-    updateTemplate(template.templateId, { rules: nextRules });
+    setRules(nextRules);
     setDraft(createEmptyRule());
     setEditingId("");
   }
 
   function removeRule(ruleId) {
-    if (!template) return;
-    updateTemplate(template.templateId, { rules: rules.filter((rule) => rule.id !== ruleId) });
+    setRules(rules.filter((rule) => rule.id !== ruleId));
     if (editingId === ruleId) {
       setEditingId("");
       setDraft(createEmptyRule());
@@ -5215,6 +5240,22 @@ function isRuleSource(source) {
   return typeof source === "string" && source.startsWith(RULE_SOURCE_PREFIX);
 }
 
+// Rules are a project-level library, not a per-template list: HR builds them
+// once and every template sees them. The library is mirrored into each
+// template's `rules` (see the mirror effect in App) so the print, preview,
+// export and import paths keep reading template.rules unchanged -- which is what
+// keeps a .printtpl self-contained when it is sent to a store.
+function mergeRuleLists(primary, extra) {
+  const out = (Array.isArray(primary) ? primary : []).filter((rule) => rule && rule.id).map((rule) => ({ ...rule }));
+  const seen = new Set(out.map((rule) => rule.id));
+  (Array.isArray(extra) ? extra : []).forEach((rule) => {
+    if (!rule || !rule.id || seen.has(rule.id)) return;
+    seen.add(rule.id);
+    out.push({ ...rule });
+  });
+  return out;
+}
+
 function ruleSourceId(ruleId) {
   return `${RULE_SOURCE_PREFIX}${String(ruleId ?? "")}`;
 }
@@ -5761,22 +5802,35 @@ function alignY(box, size, alignValue) {
 function PaperVariableText({ text, rotation = 0, className = "paper-variable-text", sizeKey = 0 }) {
   const ref = useRef(null);
   const fontsReady = useWebFontsReady();
-  const [scale, setScale] = useState(1);
   useLayoutEffect(() => {
     const el = ref.current;
     const box = el?.parentElement;
-    if (!el || !box) return;
-    const natural = el.offsetWidth;
-    const available = rotation === 90 || rotation === 270 ? box.clientHeight : box.clientWidth;
-    if (!(natural > 0) || !(available > 0)) {
-      setScale(1);
-      return;
-    }
-    const next = Math.min(1, available / natural);
-    setScale((prev) => (Math.abs(prev - next) < 0.002 ? prev : next));
+    if (!el || !box) return undefined;
+    // Shrink by font-size, not by transform: scale() leaves the span's layout box
+    // at full width, so an overflowing field kept its glyphs centred on that box
+    // instead of inside the field. Changing the size changes layout, so flex
+    // alignment (left / centre / right) stays correct -- and it is what the PDF
+    // does, which is the point of the two paths agreeing.
+    const fit = () => {
+      el.style.fontSize = "";
+      const natural = el.offsetWidth;
+      const available = rotation === 90 || rotation === 270 ? box.clientHeight : box.clientWidth;
+      if (!(natural > 0) || !(available > 0) || natural <= available) return;
+      const base = parseFloat(getComputedStyle(el).fontSize) || 0;
+      if (!(base > 0)) return;
+      el.style.fontSize = `${(base * available) / natural}px`;
+    };
+    fit();
+    // The crop image loads after first paint and resizes the tile, so the first
+    // measurement can land on a zero-width box. Without this the field was left
+    // unshrunk for good, because nothing re-ran the effect.
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const observer = new ResizeObserver(fit);
+    observer.observe(box);
+    return () => observer.disconnect();
   }, [text, rotation, sizeKey, fontsReady]);
   return (
-    <span ref={ref} className={className} style={{ transform: `rotate(${rotation}deg) scale(${scale})` }}>
+    <span ref={ref} className={className} style={{ transform: `rotate(${rotation}deg)` }}>
       {text}
     </span>
   );
