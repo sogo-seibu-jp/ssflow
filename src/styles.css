@@ -1634,12 +1634,15 @@ button:not(.primary) .spinner {
   margin-top: 2px;
 }
 
+/* Fields are single-line by contract: the size is fitted to the box instead
+   (fitSingleLineSize). pre-wrap here wrapped long CSV values onto a second line,
+   which .paper-variable's overflow:hidden then clipped. */
 .variable-text,
 .paper-variable-text {
   display: inline-block;
-  max-width: 100%;
+  max-width: none;
   transform-origin: center center;
-  white-space: pre-wrap;
+  white-space: nowrap;
 }
 
 .variable-box.selected {
@@ -4174,9 +4177,9 @@ button:not(.primary) .spinner {
   display: flex;
   line-height: 1.05;
   overflow: hidden;
-  padding: 1px;
+  padding: 0;
   position: absolute;
-  word-break: break-word;
+  word-break: normal;
 }
 
 .embedded-preview {

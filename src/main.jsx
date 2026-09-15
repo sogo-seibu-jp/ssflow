@@ -116,7 +116,7 @@ const FUNCTION_FIELD_NAMES = {
 const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/svg+xml", "image/webp"]);
 const IMAGE_FILE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "svg", "webp"]);
 const MAX_UPLOAD_BYTES = 3 * 1024 * 1024;
-const APP_VERSION = "v1.5006";
+const APP_VERSION = "v1.5007";
 const RESIZE_HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const SNAP_GRID_SIZE = 8;
 const SNAP_THRESHOLD = 6;
@@ -1921,9 +1921,13 @@ function App() {
           height: variable.heightRatio * printMetrics.itemHeight,
         };
         const baseSize = Math.max(4, variable.style.fontSize * printMetrics.variableScale);
-        // The printed size must equal what the designer shows and what the field config says.
-        // Auto-shrinking here made the PDF disagree with both, so the configured size wins.
-        const size = baseSize;
+        // Same rule as the preview: shrink to fit the box on one line, never wrap.
+        const size = fitSingleLineSize(
+          text,
+          baseSize,
+          singleLineBoxExtent(box, textRotation),
+          (value, at) => drawFont.widthOfTextAtSize(value, at)
+        );
         const textWidth = drawFont.widthOfTextAtSize(text, size);
         if (variable.style.backgroundColor && variable.style.backgroundColor !== "transparent") {
           outputPage.drawRectangle({
@@ -3213,12 +3217,12 @@ function TemplateCanvas({
                 if (setSelectedVariableId) setSelectedVariableId(variable.id);
               }}
             >
-              <span
+              <PaperVariableText
                 className="variable-text"
-                style={{ transform: `rotate(${normalizeTextRotation(variable.style.textRotation)}deg)` }}
-              >
-                {previewValues[variable.id] ?? variable.displayName}
-              </span>
+                text={previewValues[variable.id] ?? variable.displayName}
+                rotation={normalizeTextRotation(variable.style.textRotation)}
+                sizeKey={variable.style.fontSize}
+              />
               {editable && selectedVariableId === variable.id && selectedVariableIds.length <= 1 && RESIZE_HANDLES.map((mode) => (
                 <span
                   key={mode}
@@ -4787,6 +4791,7 @@ function buildMeasurementTicks(lengthPoints, stepPoints) {
 }
 
 function PaperTemplateSlot({ template, cropImageUrl, previewValues, style, fontScale = 1, showBorder = false, borderStyle = "solid", borderWidth = 0.1 }) {
+  useWebFontsReady();
   const borderClass = showBorder
     ? borderStyle === "dashed"
       ? "with-border-dashed"
@@ -4799,7 +4804,11 @@ function PaperTemplateSlot({ template, cropImageUrl, previewValues, style, fontS
     <div className={`paper-template ${borderClass}`.trim()} style={resolvedStyle}>
       {cropImageUrl && <img src={cropImageUrl} alt="" />}
       <div className="variable-layer">
-        {template.variables.map((variable) => (
+        {template.variables.map((variable) => {
+          const previewText = previewValues[variable.id] ?? variable.displayName;
+          const previewRotation = normalizeTextRotation(variable.style.textRotation);
+          const renderedSize = Math.max(0.5, variable.style.fontSize * fontScale);
+          return (
           <div
             key={variable.id}
             className="paper-variable"
@@ -4810,21 +4819,17 @@ function PaperTemplateSlot({ template, cropImageUrl, previewValues, style, fontS
               height: `${variable.heightRatio * 100}%`,
               color: variable.style.color,
               backgroundColor: resolveFieldBackgroundColor(variable.style.backgroundColor, "transparent"),
-              fontSize: Math.max(0.5, variable.style.fontSize * fontScale),
+              fontSize: renderedSize,
               fontWeight: variable.style.fontWeight,
               justifyContent: justify(variable.style.textAlign),
               alignItems: align(variable.style.verticalAlign),
               textAlign: variable.style.textAlign,
             }}
           >
-            <span
-              className="paper-variable-text"
-              style={{ transform: `rotate(${normalizeTextRotation(variable.style.textRotation)}deg)` }}
-            >
-              {previewValues[variable.id] ?? variable.displayName}
-            </span>
+            <PaperVariableText text={previewText} rotation={previewRotation} sizeKey={renderedSize} />
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -5676,16 +5681,45 @@ function encodingLabel(encoding = "utf-8", t = null) {
   return encoding.toUpperCase();
 }
 
-function fitFontSize(text, size, width, height, autoFit, font) {
-  if (!autoFit) return size;
-  let next = size;
-  while (
-    next > 4
-    && (font.widthOfTextAtSize(text, next) > width || next * 1.12 > height)
-  ) {
-    next -= 0.5;
-  }
-  return next;
+// One rule for the print preview and the PDF: the size set in the field config
+// is a MAXIMUM. Text is never wrapped; it shrinks until it fits the field box on
+// one line.
+//
+// Glyph advance widths scale linearly with font size, so the fitted size is a
+// pure ratio (maxSize * boxWidth / textWidthAtMaxSize). That is why the preview,
+// measuring in CSS pixels, and the export, measuring in PDF points, arrive at
+// the same number: both are ratios of the same font's advances. The previous
+// auto-fit ran only in the export and stepped down by 0.5pt, which is how the
+// PDF came to disagree with both the preview and the field config.
+const SINGLE_LINE_MIN_SIZE = 4;
+
+// normalizeTextRotation only ever yields 0/90/180/270, so a quarter turn swaps
+// which side of the box the line has to fit inside.
+function singleLineBoxExtent(box, textRotation) {
+  return textRotation === 90 || textRotation === 270 ? box.height : box.width;
+}
+
+function fitSingleLineSize(text, maxSize, boxWidth, measureAtSize) {
+  const value = String(text ?? "");
+  if (!value || !(boxWidth > 0) || !(maxSize > 0)) return maxSize;
+  const width = measureAtSize(value, maxSize);
+  if (!(width > 0) || width <= boxWidth) return maxSize;
+  return Math.max(SINGLE_LINE_MIN_SIZE, (maxSize * boxWidth) / width);
+}
+
+// Until the OTF is loaded, canvas measures a fallback face and the preview would
+// shrink by the wrong ratio. Re-render once the real font is ready.
+function useWebFontsReady() {
+  const [ready, setReady] = useState(
+    () => typeof document === "undefined" || !document.fonts || document.fonts.status === "loaded"
+  );
+  useEffect(() => {
+    if (ready || typeof document === "undefined" || !document.fonts) return undefined;
+    let cancelled = false;
+    document.fonts.ready.then(() => { if (!cancelled) setReady(true); });
+    return () => { cancelled = true; };
+  }, [ready]);
+  return ready;
 }
 
 function downloadBlobUrl(url, fileName) {
@@ -5715,6 +5749,37 @@ function alignY(box, size, alignValue) {
   if (alignValue === "top") return box.y + box.height - size;
   if (alignValue === "middle") return box.y + (box.height - size) / 2;
   return box.y;
+}
+
+// The preview fits from the rendered element rather than from a crop size in
+// points: getCropPointSize returns null whenever a template has no stored page
+// size, which silently disabled shrinking everywhere it was used. offsetWidth is
+// a layout value, so the scale transform never feeds back into the measurement.
+//
+// This is the same ratio the export computes (box extent / text advance width)
+// with the same font, so preview and PDF shrink by the same amount.
+function PaperVariableText({ text, rotation = 0, className = "paper-variable-text", sizeKey = 0 }) {
+  const ref = useRef(null);
+  const fontsReady = useWebFontsReady();
+  const [scale, setScale] = useState(1);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const box = el?.parentElement;
+    if (!el || !box) return;
+    const natural = el.offsetWidth;
+    const available = rotation === 90 || rotation === 270 ? box.clientHeight : box.clientWidth;
+    if (!(natural > 0) || !(available > 0)) {
+      setScale(1);
+      return;
+    }
+    const next = Math.min(1, available / natural);
+    setScale((prev) => (Math.abs(prev - next) < 0.002 ? prev : next));
+  }, [text, rotation, sizeKey, fontsReady]);
+  return (
+    <span ref={ref} className={className} style={{ transform: `rotate(${rotation}deg) scale(${scale})` }}>
+      {text}
+    </span>
+  );
 }
 
 function normalizeTextRotation(value) {
