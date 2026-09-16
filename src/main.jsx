@@ -2244,7 +2244,6 @@ function App() {
         {view === "template" && (
           <TemplatePackagePage
             workMode={workMode}
-            printLocked={printLocked}
             language={language}
             templates={templates}
             templatePreviewUrls={templatePreviewUrls}
@@ -2410,7 +2409,7 @@ function createEmptyRule() {
   };
 }
 
-function TemplatePackagePage({ workMode, printLocked = false, language, templates, templatePreviewUrls, activeTemplateId, setActiveTemplateId, updateTemplate, deleteTemplate, exportTemplateFile, importTemplateFile, flowStatus, t }) {
+function TemplatePackagePage({ workMode, language, templates, templatePreviewUrls, activeTemplateId, setActiveTemplateId, updateTemplate, deleteTemplate, exportTemplateFile, importTemplateFile, flowStatus, t }) {
   return (
     <section className="page-grid single-column">
       <div className="section-card">
@@ -2420,12 +2419,10 @@ function TemplatePackagePage({ workMode, printLocked = false, language, template
             <p className="muted">{t(workMode === "print" ? "templates.printSelectionHelp" : "templates.packageHelp")}</p>
             <p className="muted">{t("templates.packageStatus", { status: t(`templates.status.${flowStatus.template}`) })}</p>
           </div>
-          {!printLocked && (
-            <label className={`button ui-button ${workMode === "print" ? "" : "primary"}`}>
-              <Upload size={16} /> {t("button.uploadTemplate")}
-              <input type="file" accept=".printtpl,application/json" onChange={importTemplateFile} />
-            </label>
-          )}
+          <label className={`button ui-button ${workMode === "print" ? "" : "primary"}`}>
+            <Upload size={16} /> {t("button.uploadTemplate")}
+            <input type="file" accept=".printtpl,application/json" onChange={importTemplateFile} />
+          </label>
         </div>
         <div className="template-list">
           {templates.length === 0 && <EmptyState title={t("source.noTemplates")} text={t("source.noTemplatesText")} />}
@@ -2442,23 +2439,20 @@ function TemplatePackagePage({ workMode, printLocked = false, language, template
               <input
                 className="template-name-input"
                 value={template.templateName}
-                readOnly={printLocked}
                 onChange={(event) => updateTemplate(template.templateId, { templateName: event.target.value })}
               />
               <div className="template-row-actions">
                 <button onClick={() => exportTemplateFile(template.templateId)}>
                   <ArrowDownToLine size={16} /> {t("button.saveTemplatePackage")}
                 </button>
-                {!printLocked && (
-                  <button
-                    className="danger"
-                    aria-label={t("button.deleteTemplate")}
-                    title={t("button.deleteTemplate")}
-                    onClick={() => deleteTemplate(template.templateId)}
-                  >
-                    <Trash2 size={16} /> {t("button.deleteTemplate")}
-                  </button>
-                )}
+                <button
+                  className="danger"
+                  aria-label={t("button.deleteTemplate")}
+                  title={t("button.deleteTemplate")}
+                  onClick={() => deleteTemplate(template.templateId)}
+                >
+                  <Trash2 size={16} /> {t("button.deleteTemplate")}
+                </button>
               </div>
             </article>
           ))}
