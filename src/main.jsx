@@ -1973,14 +1973,10 @@ function App() {
           width: variable.widthRatio * printMetrics.itemWidth,
           height: variable.heightRatio * printMetrics.itemHeight,
         };
-        const baseSize = Math.max(4, variable.style.fontSize * printMetrics.variableScale);
-        // Same rule as the preview: shrink to fit the box on one line, never wrap.
-        const size = fitSingleLineSize(
-          text,
-          baseSize,
-          singleLineBoxExtent(box, textRotation),
-          (value, at) => drawFont.widthOfTextAtSize(value, at)
-        );
+        // The size set in the field config is the size that prints. Text is never
+        // wrapped and never shrunk to fit: a value too long for its box overflows
+        // rather than silently changing size.
+        const size = Math.max(4, variable.style.fontSize * printMetrics.variableScale);
         const textWidth = drawFont.widthOfTextAtSize(text, size);
         if (variable.style.backgroundColor && variable.style.backgroundColor !== "transparent") {
           outputPage.drawRectangle({
@@ -1997,7 +1993,7 @@ function App() {
           y: textOrigin.y,
           size,
           font: drawFont,
-          rotate: degrees(textRotation),
+          rotate: degrees(pdfTextRotation(textRotation)),
           color: hexToRgb(variable.style.color),
         });
       });
@@ -3268,6 +3264,8 @@ function TemplateCanvas({
                 className="variable-text"
                 text={previewValues[variable.id] ?? variable.displayName}
                 rotation={normalizeTextRotation(variable.style.textRotation)}
+                textAlign={variable.style.textAlign}
+                verticalAlign={variable.style.verticalAlign}
                 sizeKey={variable.style.fontSize}
               />
               {editable && selectedVariableId === variable.id && selectedVariableIds.length <= 1 && RESIZE_HANDLES.map((mode) => (
@@ -4963,7 +4961,13 @@ function PaperTemplateSlot({ template, cropImageUrl, previewValues, style, fontS
               textAlign: variable.style.textAlign,
             }}
           >
-            <PaperVariableText text={previewText} rotation={previewRotation} sizeKey={renderedSize} />
+            <PaperVariableText
+              text={previewText}
+              rotation={previewRotation}
+              textAlign={variable.style.textAlign}
+              verticalAlign={variable.style.verticalAlign}
+              sizeKey={renderedSize}
+            />
           </div>
           );
         })}
@@ -5904,32 +5908,6 @@ function encodingLabel(encoding = "utf-8", t = null) {
   return encoding.toUpperCase();
 }
 
-// One rule for the print preview and the PDF: the size set in the field config
-// is a MAXIMUM. Text is never wrapped; it shrinks until it fits the field box on
-// one line.
-//
-// Glyph advance widths scale linearly with font size, so the fitted size is a
-// pure ratio (maxSize * boxWidth / textWidthAtMaxSize). That is why the preview,
-// measuring in CSS pixels, and the export, measuring in PDF points, arrive at
-// the same number: both are ratios of the same font's advances. The previous
-// auto-fit ran only in the export and stepped down by 0.5pt, which is how the
-// PDF came to disagree with both the preview and the field config.
-const SINGLE_LINE_MIN_SIZE = 4;
-
-// normalizeTextRotation only ever yields 0/90/180/270, so a quarter turn swaps
-// which side of the box the line has to fit inside.
-function singleLineBoxExtent(box, textRotation) {
-  return textRotation === 90 || textRotation === 270 ? box.height : box.width;
-}
-
-function fitSingleLineSize(text, maxSize, boxWidth, measureAtSize) {
-  const value = String(text ?? "");
-  if (!value || !(boxWidth > 0) || !(maxSize > 0)) return maxSize;
-  const width = measureAtSize(value, maxSize);
-  if (!(width > 0) || width <= boxWidth) return maxSize;
-  return Math.max(SINGLE_LINE_MIN_SIZE, (maxSize * boxWidth) / width);
-}
-
 // Until the OTF is loaded, canvas measures a fallback face and the preview would
 // shrink by the wrong ratio. Re-render once the real font is ready.
 function useWebFontsReady() {
@@ -5962,18 +5940,6 @@ function buildButtonTooltip(label, t) {
   return `Click to ${text.toLowerCase()}.`;
 }
 
-function alignX(box, textWidth, alignValue) {
-  if (alignValue === "right") return box.x + box.width - textWidth;
-  if (alignValue === "center") return box.x + (box.width - textWidth) / 2;
-  return box.x;
-}
-
-function alignY(box, size, alignValue) {
-  if (alignValue === "top") return box.y + box.height - size;
-  if (alignValue === "middle") return box.y + (box.height - size) / 2;
-  return box.y;
-}
-
 // The preview fits from the rendered element rather than from a crop size in
 // points: getCropPointSize returns null whenever a template has no stored page
 // size, which silently disabled shrinking everywhere it was used. offsetWidth is
@@ -5981,36 +5947,69 @@ function alignY(box, size, alignValue) {
 //
 // This is the same ratio the export computes (box extent / text advance width)
 // with the same font, so preview and PDF shrink by the same amount.
-function PaperVariableText({ text, rotation = 0, className = "paper-variable-text", sizeKey = 0 }) {
+function PaperVariableText({
+  text,
+  rotation = 0,
+  textAlign = "left",
+  verticalAlign = "middle",
+  className = "paper-variable-text",
+  sizeKey = 0,
+}) {
   const ref = useRef(null);
   const fontsReady = useWebFontsReady();
   useLayoutEffect(() => {
     const el = ref.current;
     const box = el?.parentElement;
     if (!el || !box) return undefined;
-    // Shrink by font-size, not by transform: scale() leaves the span's layout box
-    // at full width, so an overflowing field kept its glyphs centred on that box
-    // instead of inside the field. Changing the size changes layout, so flex
-    // alignment (left / centre / right) stays correct -- and it is what the PDF
-    // does, which is the point of the two paths agreeing.
-    const fit = () => {
-      el.style.fontSize = "";
-      const natural = el.offsetWidth;
-      const available = rotation === 90 || rotation === 270 ? box.clientHeight : box.clientWidth;
-      if (!(natural > 0) || !(available > 0) || natural <= available) return;
-      const base = parseFloat(getComputedStyle(el).fontSize) || 0;
-      if (!(base > 0)) return;
-      el.style.fontSize = `${(base * available) / natural}px`;
+    const normalized = normalizeTextRotation(rotation);
+    const vertical = normalized === 90 || normalized === 270;
+
+    const apply = () => {
+      const boxWidth = box.clientWidth;
+      const boxHeight = box.clientHeight;
+
+      if (!normalized) {
+        // Unrotated text keeps the flex alignment path, which is equivalent.
+        el.style.position = "";
+        el.style.left = "";
+        el.style.top = "";
+        return;
+      }
+      if (!(boxWidth > 0) || !(boxHeight > 0)) return;
+
+      // Rotated text cannot use flex alignment: a CSS transform does not change
+      // layout, so the browser aligns the horizontal line box and only then
+      // spins it -- which is why textAlign appeared to do nothing sensible on a
+      // vertical field. Place it explicitly with the same rule the export uses.
+      const textWidth = el.offsetWidth;
+      const textHeight = el.offsetHeight;
+      const corner = alignRotatedFootprint({
+        box: { x: 0, y: 0, width: boxWidth, height: boxHeight },
+        textWidth,
+        textHeight,
+        textAlign,
+        verticalAlign,
+        rotation: normalized,
+        yDown: true,
+      });
+      // transform-origin is the centre, so the rotated footprint stays centred on
+      // the layout box's centre; offset the layout box to put it where we want.
+      const footprintWidth = vertical ? textHeight : textWidth;
+      const footprintHeight = vertical ? textWidth : textHeight;
+      el.style.position = "absolute";
+      el.style.left = `${corner.x + (footprintWidth - textWidth) / 2}px`;
+      el.style.top = `${corner.y + (footprintHeight - textHeight) / 2}px`;
     };
-    fit();
+
+    apply();
     // The crop image loads after first paint and resizes the tile, so the first
     // measurement can land on a zero-width box. Without this the field was left
-    // unshrunk for good, because nothing re-ran the effect.
+    // unplaced for good, because nothing re-ran the effect.
     if (typeof ResizeObserver === "undefined") return undefined;
-    const observer = new ResizeObserver(fit);
+    const observer = new ResizeObserver(apply);
     observer.observe(box);
     return () => observer.disconnect();
-  }, [text, rotation, sizeKey, fontsReady]);
+  }, [text, rotation, textAlign, verticalAlign, sizeKey, fontsReady]);
   return (
     <span ref={ref} className={className} style={{ transform: `rotate(${rotation}deg)` }}>
       {text}
@@ -6025,37 +6024,89 @@ function normalizeTextRotation(value) {
   return normalized;
 }
 
-function alignBoxX(box, contentWidth, alignValue) {
-  if (alignValue === "right") return box.x + box.width - contentWidth;
-  if (alignValue === "center") return box.x + (box.width - contentWidth) / 2;
-  return box.x;
+// Rotation is authored in the designer, where CSS rotates CLOCKWISE on a y-down
+// screen. pdf-lib's degrees() rotates counter-clockwise in PDF space, where y is
+// up, so the same stored value turned the two opposite ways: a 270 field read
+// bottom-to-top on screen and top-to-bottom on paper. Confirmed by reading the
+// text matrices out of a generated PDF (degrees(90) advances +y, tops face -x).
+// The export negates so the print follows what the designer shows.
+function pdfTextRotation(rotation) {
+  return (360 - normalizeTextRotation(rotation)) % 360;
 }
 
-function alignBoxY(box, contentHeight, alignValue) {
-  if (alignValue === "top") return box.y + box.height - contentHeight;
-  if (alignValue === "middle") return box.y + (box.height - contentHeight) / 2;
-  return box.y;
+// Reading direction and glyph-up direction per quarter turn, in the designer's
+// frame (CSS: x right, y down, clockwise).
+//   r     reads          tops face
+//   0     +x             -y
+//   90    +y             +x
+//   180   -x             +y
+//   270   -y             -x
+const TEXT_ROTATION_AXES = {
+  0: { vertical: false, readForward: true, upTowardHigh: false },
+  90: { vertical: true, readForward: true, upTowardHigh: true },
+  180: { vertical: false, readForward: false, upTowardHigh: true },
+  270: { vertical: true, readForward: false, upTowardHigh: false },
+};
+
+const TEXT_ALIGN_POSITION = { left: "start", center: "center", right: "end" };
+const VERTICAL_ALIGN_POSITION = { top: "start", middle: "center", bottom: "end" };
+
+function flipPosition(position) {
+  if (position === "start") return "end";
+  if (position === "end") return "start";
+  return "center";
 }
 
+function placeExtent(low, span, extent, position) {
+  if (position === "end") return low + span - extent;
+  if (position === "center") return low + (span - extent) / 2;
+  return low;
+}
+
+// Places the rotated text's footprint in `box` and returns its low corner (in
+// the caller's frame: low y is the top in CSS, the bottom in PDF).
+//
+// The point of this function: a quarter turn changes which way the text reads,
+// so the two alignment controls have to follow it. textAlign works along the
+// reading direction and verticalAlign across it. Previously textAlign always
+// aligned on X, which for a vertical field only slid the line sideways and gave
+// no way to position it along its own length -- the broken alignment reported
+// for 270-degree fields. `yDown` is true for the DOM preview and false for PDF
+// space, and is the only difference between the two callers.
+function alignRotatedFootprint({ box, textWidth, textHeight, textAlign, verticalAlign, rotation, yDown }) {
+  const axes = TEXT_ROTATION_AXES[normalizeTextRotation(rotation)] ?? TEXT_ROTATION_AXES[0];
+  const readForward = axes.vertical && !yDown ? !axes.readForward : axes.readForward;
+  const upTowardHigh = !axes.vertical && !yDown ? !axes.upTowardHigh : axes.upTowardHigh;
+  const alignPosition = TEXT_ALIGN_POSITION[textAlign] ?? "center";
+  const verticalPosition = VERTICAL_ALIGN_POSITION[verticalAlign] ?? "center";
+  const alongPosition = readForward ? alignPosition : flipPosition(alignPosition);
+  const acrossPosition = upTowardHigh ? flipPosition(verticalPosition) : verticalPosition;
+  const along = placeExtent(
+    axes.vertical ? box.y : box.x,
+    axes.vertical ? box.height : box.width,
+    textWidth,
+    alongPosition,
+  );
+  const across = placeExtent(
+    axes.vertical ? box.x : box.y,
+    axes.vertical ? box.width : box.height,
+    textHeight,
+    acrossPosition,
+  );
+  return axes.vertical ? { x: across, y: along } : { x: along, y: across };
+}
+
+// Converts that footprint corner into the baseline origin pdf-lib expects, which
+// depends on where the text starts and which way it advances.
 function rotatedTextOrigin(box, textWidth, textHeight, textAlign, verticalAlign, rotation) {
   const normalized = normalizeTextRotation(rotation);
-  if (normalized === 0) {
-    return {
-      x: alignX(box, textWidth, textAlign),
-      y: alignY(box, textHeight, verticalAlign),
-    };
-  }
-  const rotatedWidth = normalized === 90 || normalized === 270 ? textHeight : textWidth;
-  const rotatedHeight = normalized === 90 || normalized === 270 ? textWidth : textHeight;
-  const left = alignBoxX(box, rotatedWidth, textAlign);
-  const bottom = alignBoxY(box, rotatedHeight, verticalAlign);
-  if (normalized === 90) {
-    return { x: left + textHeight, y: bottom };
-  }
-  if (normalized === 180) {
-    return { x: left + textWidth, y: bottom + textHeight };
-  }
-  return { x: left, y: bottom + textWidth };
+  const { x: left, y: bottom } = alignRotatedFootprint({
+    box, textWidth, textHeight, textAlign, verticalAlign, rotation: normalized, yDown: false,
+  });
+  if (normalized === 90) return { x: left, y: bottom + textWidth };
+  if (normalized === 180) return { x: left + textWidth, y: bottom + textHeight };
+  if (normalized === 270) return { x: left + textHeight, y: bottom };
+  return { x: left, y: bottom };
 }
 
 function hexToRgb(hex) {
